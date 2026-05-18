@@ -1,0 +1,249 @@
+from __future__ import annotations
+
+import logging
+import re
+from enum import Enum
+
+from openai import OpenAI
+from pydantic import BaseModel, EmailStr
+
+from backend.config import get_settings
+from backend.database import SALES_MIN_YEAR
+
+logger = logging.getLogger(__name__)
+
+EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+VEHICLE_ID_RE = re.compile(r"(?:vehicle\s*)?(?:#|id\s*)(\d+)", re.IGNORECASE)
+LEGACY_YEAR_RE = re.compile(r"\b(2019|2020|2021)\b")
+
+POLICY_KEYWORDS = (
+    "refund",
+    "test drive",
+    "shipping",
+    "delivery",
+    "maintenance",
+    "warranty",
+    "policy",
+    "service schedule",
+    "contact support",
+)
+INVENTORY_KEYWORDS = (
+    "car",
+    "cars",
+    "vehicle",
+    "inventory",
+    "stock",
+    "find",
+    "show",
+    "suv",
+    "sedan",
+    "price",
+    "cost",
+    "under $",
+    "below $",
+    "tesla",
+    "bmw",
+    "audi",
+)
+PURCHASE_KEYWORDS = ("buy", "purchase", "order", "pay")
+RESERVE_KEYWORDS = ("reserve", "hold", "book")
+
+
+class IntentKind(str, Enum):
+    INVENTORY_SEARCH = "inventory_search"
+    POLICY_QUESTION = "policy_question"
+    HYBRID_RAG = "hybrid_rag"
+    PURCHASE_INTENT = "purchase_intent"
+    RESERVE_INTENT = "reserve_intent"
+    GENERAL_CHAT = "general_chat"
+    LEGACY_YEAR_CONFLICT = "legacy_year_conflict"
+
+
+class ExtractedIntent(BaseModel):
+    intent: IntentKind
+    make: str | None = None
+    model: str | None = None
+    year: int | None = None
+    year_min: int | None = None
+    price_max: float | None = None
+    vehicle_id: int | None = None
+    user_email: EmailStr | None = None
+
+
+def extract_email(message: str, override: str | None) -> str | None:
+    if override:
+        return override
+    match = EMAIL_RE.search(message)
+    return match.group(0) if match else None
+
+
+def extract_vehicle_id(message: str) -> int | None:
+    match = VEHICLE_ID_RE.search(message)
+    return int(match.group(1)) if match else None
+
+
+def extract_year(message: str) -> int | None:
+    match = re.search(r"\b(20\d{2})\b", message)
+    return int(match.group(1)) if match else None
+
+
+def extract_price_max(message: str) -> float | None:
+    match = re.search(
+        r"(?:under|below|max|less than)\s*\$?\s*([\d,]+)|\$?\s*([\d,]+)\s*(?:or less|max)",
+        message.lower(),
+    )
+    if match:
+        value = match.group(1) or match.group(2)
+        return float(value.replace(",", "")) if value else None
+    return None
+
+
+def extract_make_model(message: str) -> tuple[str | None, str | None]:
+    makes = [
+        "Tesla",
+        "BMW",
+        "Audi",
+        "Mercedes-Benz",
+        "Mercedes",
+        "Porsche",
+        "Lexus",
+        "Volvo",
+        "Genesis",
+        "Jaguar",
+        "Land Rover",
+        "Cadillac",
+        "Lincoln",
+    ]
+    lower = message.lower()
+    found_make: str | None = None
+    for make in makes:
+        if make.lower() in lower:
+            found_make = "Mercedes-Benz" if make == "Mercedes" else make
+            break
+    model = None
+    if found_make:
+        patterns = [
+            r"model\s+([a-z0-9][\w\s-]*)",
+            r"(model\s*y|model\s*3|x5|q7|a4|gle|c-class|f-pace|range rover)",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, lower)
+            if m:
+                model = m.group(1).strip().title()
+                break
+    return found_make, model
+
+
+def has_policy_signal(message: str) -> bool:
+    lower = message.lower()
+    return any(k in lower for k in POLICY_KEYWORDS)
+
+
+def has_inventory_signal(
+    message: str, make: str | None, year: int | None, price_max: float | None
+) -> bool:
+    lower = message.lower()
+    return bool(
+        any(k in lower for k in INVENTORY_KEYWORDS) or make or year is not None or price_max
+    )
+
+
+def is_legacy_year_focus(extracted: ExtractedIntent, message: str) -> bool:
+    if extracted.year is not None and extracted.year < SALES_MIN_YEAR:
+        return True
+    if extracted.year_min is not None and extracted.year_min < SALES_MIN_YEAR:
+        return True
+    return LEGACY_YEAR_RE.search(message) is not None
+
+
+def classify_intent_rule_based(message: str, user_email: str | None = None) -> ExtractedIntent:
+    lower = message.lower()
+    email = extract_email(message, user_email)
+    vehicle_id = extract_vehicle_id(message)
+    year = extract_year(message)
+    make, model = extract_make_model(message)
+    price_max = extract_price_max(message)
+
+    if any(k in lower for k in RESERVE_KEYWORDS):
+        return ExtractedIntent(
+            intent=IntentKind.RESERVE_INTENT,
+            vehicle_id=vehicle_id,
+            user_email=email,
+            make=make,
+            model=model,
+            year=year,
+        )
+    if any(k in lower for k in PURCHASE_KEYWORDS):
+        return ExtractedIntent(
+            intent=IntentKind.PURCHASE_INTENT,
+            vehicle_id=vehicle_id,
+            user_email=email,
+            make=make,
+            model=model,
+            year=year,
+        )
+
+    has_policy = has_policy_signal(message)
+    has_inventory = has_inventory_signal(message, make, year, price_max)
+    if has_policy and has_inventory:
+        return ExtractedIntent(
+            intent=IntentKind.HYBRID_RAG,
+            make=make,
+            model=model,
+            year=year,
+            year_min=year,
+            price_max=price_max,
+        )
+    if has_policy:
+        return ExtractedIntent(intent=IntentKind.POLICY_QUESTION)
+    if has_inventory:
+        base = ExtractedIntent(
+            intent=IntentKind.INVENTORY_SEARCH,
+            make=make,
+            model=model,
+            year=year,
+            year_min=year,
+            price_max=price_max,
+        )
+        if is_legacy_year_focus(base, message):
+            base.intent = IntentKind.LEGACY_YEAR_CONFLICT
+        return base
+    return ExtractedIntent(intent=IntentKind.GENERAL_CHAT)
+
+
+def classify_intent(message: str, user_email: str | None = None) -> ExtractedIntent:
+    settings = get_settings()
+    if not settings.openai_api_key.strip():
+        return classify_intent_rule_based(message, user_email)
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    try:
+        completion = client.beta.chat.completions.parse(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Classify dealership concierge messages. "
+                        "Use hybrid_rag when the user asks about BOTH inventory/pricing AND "
+                        "policies (refund, shipping, test drive, etc.) in one message. "
+                        "Use legacy_year_conflict when they ask specifically for model years "
+                        "2019, 2020, or 2021. Extract make, model, year, vehicle_id, user_email."
+                    ),
+                },
+                {"role": "user", "content": message},
+            ],
+            response_format=ExtractedIntent,
+        )
+        parsed = completion.choices[0].message.parsed
+        if parsed is not None:
+            if user_email and not parsed.user_email:
+                parsed.user_email = user_email
+            if parsed.intent == IntentKind.INVENTORY_SEARCH and is_legacy_year_focus(
+                parsed, message
+            ):
+                parsed.intent = IntentKind.LEGACY_YEAR_CONFLICT
+            return parsed
+    except Exception as exc:
+        logger.warning("LLM intent classification failed, using rules: %s", exc)
+    return classify_intent_rule_based(message, user_email)

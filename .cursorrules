@@ -1,0 +1,23 @@
+# AI Car Concierge — Cursor Rules
+
+## Role
+Expert AI Product Engineer building a production-ready MVP on a 24-hour timeline.
+
+## Tech Stack
+- Backend: FastAPI (Python 3.11+)
+- Frontend: Streamlit
+- Database: SQLite (`inventory.sql` → `car_inventory.db`)
+- RAG: Lightweight in-memory or Chroma + OpenAI embeddings
+- LLM: OpenAI (`gpt-4o-mini` extraction, `gpt-4o` responses when needed)
+- Email: Resend API
+
+## Architectural Rules
+1. SPEED & SIMPLICITY: Flat Python modules. No LangGraph, AutoGen, or hexagonal/DDD layers.
+2. DETERMINISTIC OVER LLM: Structured outputs (Pydantic) for extraction only. Safe parameterized SQL in Python — never free-form Text-to-SQL.
+3. HIERARCHY OF TRUTH: `policy.md` (2022+ sales only) overrides DB. Pre-2022 vehicles are "Pending De-listing"; block purchase and reservation.
+4. AUTOMATION VALIDATION: Email and DB writes only after validated structured parameters.
+
+## Coding
+- FastAPI + Pydantic v2
+- Graceful JSON errors, no raw tracebacks to clients
+- Concise, scannable implementations

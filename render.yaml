@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-car-concierge-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /ready
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: RESEND_TO_EMAIL
+        sync: false
