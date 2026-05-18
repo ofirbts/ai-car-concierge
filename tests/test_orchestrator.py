@@ -33,7 +33,7 @@ def test_reserve_vehicle_raises_policy(isolated_db):
 def test_handle_chat_notes_delisted_inventory(isolated_db):
     response = handle_chat(
         ChatRequest(message="show cars from 2019"),
-        rag=PolicyRAGService(use_openai=False),
+        rag=PolicyRAGService(use_embeddings=False),
     )
     assert response.intent == IntentKind.LEGACY_YEAR_CONFLICT
     assert response.blocked is True

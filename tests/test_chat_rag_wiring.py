@@ -10,7 +10,7 @@ def test_chat_endpoint_uses_injected_rag_service(api_client):
             searches.append(query)
             return super().search(query, top_k=top_k)
 
-    tracking = TrackingRAG(use_openai=False)
+    tracking = TrackingRAG(use_embeddings=False)
     app.dependency_overrides[get_rag_service] = lambda: tracking
     try:
         response = api_client.post(

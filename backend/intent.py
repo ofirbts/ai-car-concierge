@@ -4,11 +4,11 @@ import logging
 import re
 from enum import Enum
 
-from openai import OpenAI
 from pydantic import BaseModel, EmailStr
 
 from backend.config import get_settings
 from backend.database import SALES_MIN_YEAR
+from backend.gemini_service import generate_structured
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,14 @@ INVENTORY_KEYWORDS = (
 )
 PURCHASE_KEYWORDS = ("buy", "purchase", "order", "pay")
 RESERVE_KEYWORDS = ("reserve", "hold", "book")
+
+INTENT_SYSTEM = (
+    "Classify dealership concierge messages. "
+    "Use hybrid_rag when the user asks about BOTH inventory/pricing AND "
+    "policies (refund, shipping, test drive, etc.) in one message. "
+    "Use legacy_year_conflict when they ask specifically for model years "
+    "2019, 2020, or 2021. Extract make, model, year, vehicle_id, user_email when present."
+)
 
 
 class IntentKind(str, Enum):
@@ -212,38 +220,18 @@ def classify_intent_rule_based(message: str, user_email: str | None = None) -> E
 
 
 def classify_intent(message: str, user_email: str | None = None) -> ExtractedIntent:
-    settings = get_settings()
-    if not settings.openai_api_key.strip():
+    if not get_settings().has_google_api():
         return classify_intent_rule_based(message, user_email)
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    try:
-        completion = client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Classify dealership concierge messages. "
-                        "Use hybrid_rag when the user asks about BOTH inventory/pricing AND "
-                        "policies (refund, shipping, test drive, etc.) in one message. "
-                        "Use legacy_year_conflict when they ask specifically for model years "
-                        "2019, 2020, or 2021. Extract make, model, year, vehicle_id, user_email."
-                    ),
-                },
-                {"role": "user", "content": message},
-            ],
-            response_format=ExtractedIntent,
-        )
-        parsed = completion.choices[0].message.parsed
-        if parsed is not None:
-            if user_email and not parsed.user_email:
-                parsed.user_email = user_email
-            if parsed.intent == IntentKind.INVENTORY_SEARCH and is_legacy_year_focus(
-                parsed, message
-            ):
-                parsed.intent = IntentKind.LEGACY_YEAR_CONFLICT
-            return parsed
-    except Exception as exc:
-        logger.warning("LLM intent classification failed, using rules: %s", exc)
+    parsed = generate_structured(INTENT_SYSTEM, message, ExtractedIntent)
+    if parsed is not None:
+        if user_email and not parsed.user_email:
+            parsed.user_email = user_email
+        if parsed.intent == IntentKind.INVENTORY_SEARCH and is_legacy_year_focus(
+            parsed, message
+        ):
+            parsed.intent = IntentKind.LEGACY_YEAR_CONFLICT
+        return parsed
+
+    logger.warning("Gemini intent classification unavailable, using rules")
     return classify_intent_rule_based(message, user_email)

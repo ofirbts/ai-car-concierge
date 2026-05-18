@@ -21,7 +21,7 @@ def test_ready_reports_inventory_and_policies(api_client):
     assert data["status"] == "ready"
     assert data["vehicles"] == 100
     assert data["policy_chunks"] >= 10
-    assert data["rag_mode"] in ("keyword", "openai_embeddings")
+    assert data["rag_mode"] in ("keyword", "gemini_embeddings")
 
 
 def test_list_vehicles_filter_make(api_client):

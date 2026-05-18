@@ -10,7 +10,7 @@ POLICIES = ROOT / "data" / "policies"
 
 @pytest.fixture
 def rag():
-    return PolicyRAGService(policies_dir=POLICIES, use_openai=False)
+    return PolicyRAGService(policies_dir=POLICIES, use_embeddings=False)
 
 
 def test_loads_all_five_policy_files():

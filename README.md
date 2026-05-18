@@ -1,74 +1,60 @@
 # AI Car Concierge
 
-Premium dealership chatbot: **hybrid RAG** (SQLite + OpenAI embeddings or keyword fallback), **2022+ policy enforcement**, **Resend purchase emails**, **SQLite reservations**.
+Premium dealership chatbot: **hybrid RAG** (SQLite + Google Gemini embeddings), **Gemini** intent/replies, **Resend** emails, **2022+ policy** enforcement.
 
-## Assignment checklist
+## Stack
 
-| Requirement | Status |
-|-------------|--------|
-| Structured inventory (`inventory.sql` → SQLite) | Done |
-| Policy knowledge base (5 markdown files) | Done |
-| Hybrid RAG in chat (`hybrid_rag` intent, SQL + policy RAG) | Done |
-| Policy RAG uses same config as LLM (`bootstrap()` + `get_settings()`) | Done |
-| Conflict: pre-2022 visible, not sold/reserved | Done (`legacy_year_conflict`, HTTP 409 on chat reserve/purchase) |
-| Live email on purchase intent | Done (`RESEND_API_KEY` required) |
-| Live DB reserve (`stock_count--`) | Done |
-| FastAPI + Streamlit | Done |
-| Tests | `pytest` (60 tests) |
-| **GitHub repo** | **You: `git commit` + push** |
-| **Public URL** | **You: deploy via `Dockerfile` / `render.yaml`** |
+- FastAPI + Pydantic v2
+- Streamlit UI
+- SQLite inventory (parameterized queries, no Text-to-SQL)
+- **Google Gemini** — chat, structured intent, policy embeddings
+- Resend — purchase emails
 
-## Architecture
+## Environment
 
-```
-Streamlit → POST /api/chat
-              └─ Depends(get_policy_rag_service)   # embeddings when OPENAI_API_KEY set
-              └─ orchestrator.handle_chat
-                    ├─ intent.py (rules + gpt-4o-mini structured)
-                    ├─ SQLite search (parameterized)
-                    ├─ PolicyRAGService.search (embeddings | keyword)
-                    └─ llm_service.synthesize_reply (optional natural answer)
-```
+Single API key via any of these names (first match in `.env`):
 
-## Configuration (single source)
+- `GOOGLE_API_KEY`
+- `GEMINI_API_KEY`
+- `OPENAI_API_KEY` (legacy name — use your `AIza...` Google key here)
 
-All modules use `backend.config.get_settings()` after `bootstrap()` loads `.env` via `python-dotenv` on app startup.
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GEMINI_CHAT_MODEL` | `gemini-2.5-flash` | Intent + replies |
+| `GEMINI_CHAT_MODEL_QUALITY` | `gemini-2.5-pro` | When `USE_QUALITY_LLM=true` |
+| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Policy RAG vectors |
+| `RESEND_*` | — | Purchase email automation |
 
-| Variable | Purpose |
-|----------|---------|
-| `OPENAI_API_KEY` | Intent LLM, reply synthesis, policy embeddings |
-| `RESEND_API_KEY` | Purchase emails |
-| `SHOW_DEBUG_META` | Streamlit intent/rag debug footer |
-| `USE_QUALITY_LLM` | Use `gpt-4o` instead of `gpt-4o-mini` for replies |
-
-## Run locally
+## Run
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+# Put AIza... key in GOOGLE_API_KEY or OPENAI_API_KEY
 
 uvicorn backend.main:app --reload
 streamlit run frontend/app.py
 pytest -q
 ```
 
-## Deploy
+- `/ready` → `"rag_mode": "gemini_embeddings"` when key is set
+- Chat: `buy vehicle #48 with you@email.com`
 
-```bash
-# Render: connect repo, uses render.yaml + Dockerfile
-# Set env vars in dashboard, then:
-# Streamlit Cloud: point to frontend/app.py, set BACKEND_URL to deployed API
+## Architecture
+
 ```
-
-## Example prompts
-
-- `Tesla under $70000`
-- `Do you have a 2020 Tesla?`
-- `Model 3 price and refund policy`
-- `reserve vehicle #16`
-- `buy vehicle #48 with you@email.com`
+POST /api/chat → PolicyRAGService (Gemini embeddings | keyword fallback)
+              → classify_intent (Gemini JSON | rules fallback)
+              → SQLite / Resend
+              → synthesize_reply (Gemini | template fallback)
+```
 
 ## AI transparency
 
-Built with Cursor-assisted development. OpenAI is used for optional intent parsing, optional embeddings, and optional reply synthesis — never for SQL execution.
+Built with Cursor. **Google Gemini** for LLM + embeddings; **no OpenAI SDK**. Rules-based fallbacks if API fails or quota exceeded.
+
+## Deliverables still on you
+
+- Git push
+- Public deploy URL (see `Dockerfile`, `render.yaml`)

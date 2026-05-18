@@ -7,8 +7,8 @@ Expert AI Product Engineer building a production-ready MVP on a 24-hour timeline
 - Backend: FastAPI (Python 3.11+)
 - Frontend: Streamlit
 - Database: SQLite (`inventory.sql` → `car_inventory.db`)
-- RAG: Lightweight in-memory or Chroma + OpenAI embeddings
-- LLM: OpenAI (`gpt-4o-mini` extraction, `gpt-4o` responses when needed)
+- RAG: In-memory Gemini embeddings (gemini-embedding-001) or keyword fallback
+- LLM: Google Gemini (gemini-2.5-flash / gemini-2.5-pro)
 - Email: Resend API
 
 ## Architectural Rules

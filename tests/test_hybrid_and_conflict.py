@@ -18,7 +18,7 @@ def test_classify_legacy_year_intent():
 def test_handle_legacy_year_conflict(isolated_db):
     response = handle_chat(
         ChatRequest(message="Any 2021 Audi A4 available?"),
-        rag=PolicyRAGService(use_openai=False),
+        rag=PolicyRAGService(use_embeddings=False),
     )
     assert response.intent == IntentKind.LEGACY_YEAR_CONFLICT
     assert response.blocked is True
@@ -29,7 +29,7 @@ def test_handle_legacy_year_conflict(isolated_db):
 def test_hybrid_returns_inventory_and_policy(isolated_db):
     response = handle_chat(
         ChatRequest(message="BMW X5 price and shipping delivery cost"),
-        rag=PolicyRAGService(use_openai=False),
+        rag=PolicyRAGService(use_embeddings=False),
     )
     assert response.intent == IntentKind.HYBRID_RAG
     assert response.policy_context_used is True

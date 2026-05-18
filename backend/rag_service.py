@@ -4,14 +4,13 @@ import math
 import re
 from pathlib import Path
 
-from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from backend.config import get_settings
+from backend.gemini_service import embed_query, embed_texts
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 POLICIES_DIR = PROJECT_ROOT / "data" / "policies"
-EMBEDDING_MODEL = "text-embedding-3-small"
 
 _default_service: PolicyRAGService | None = None
 
@@ -116,46 +115,30 @@ class PolicyRAGService:
     def __init__(
         self,
         policies_dir: Path | None = None,
-        use_openai: bool | None = None,
-        client: OpenAI | None = None,
+        use_embeddings: bool | None = None,
     ):
         self._chunks = load_policy_chunks(policies_dir)
         self._embeddings: list[list[float]] | None = None
         self._embeddings_ready = False
         settings = get_settings()
-        api_key = settings.openai_api_key.strip()
-        self._use_openai = use_openai if use_openai is not None else bool(api_key)
-        self._client = client
-        if self._use_openai and self._client is None and api_key:
-            self._client = OpenAI(api_key=api_key)
+        self._use_embeddings = (
+            use_embeddings if use_embeddings is not None else settings.has_google_api()
+        )
 
     @property
     def retrieval_mode(self) -> str:
-        return "openai_embeddings" if self._use_openai and self._client else "keyword"
+        return "gemini_embeddings" if self._use_embeddings else "keyword"
 
     def _ensure_embeddings(self) -> None:
-        if self._embeddings_ready or not self._use_openai or not self._client:
+        if self._embeddings_ready or not self._use_embeddings:
             return
         if not self._chunks:
             self._embeddings = []
             self._embeddings_ready = True
             return
         texts = [f"{c['heading']}\n{c['content']}" for c in self._chunks]
-        response = self._client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=texts,
-        )
-        self._embeddings = [item.embedding for item in response.data]
+        self._embeddings = embed_texts(texts)
         self._embeddings_ready = True
-
-    def _embed_query(self, query: str) -> list[float]:
-        if not self._client:
-            return []
-        response = self._client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=[query],
-        )
-        return response.data[0].embedding
 
     def search(self, query: str, top_k: int = 3) -> PolicySearchResult:
         mode = self.retrieval_mode
@@ -167,14 +150,15 @@ class PolicyRAGService:
             return PolicySearchResult(query=query, chunks=[], retrieval_mode=mode)
 
         ranked: list[tuple[float, dict[str, str]]] = []
-        if self._use_openai and self._client:
+        if self._use_embeddings:
             self._ensure_embeddings()
-            if self._embeddings:
-                query_vec = self._embed_query(query_stripped)
-                for chunk, vec in zip(self._chunks, self._embeddings):
-                    score = _cosine_similarity(query_vec, vec)
-                    ranked.append((score, chunk))
-            else:
+            if self._embeddings and len(self._embeddings) == len(self._chunks):
+                query_vec = embed_query(query_stripped)
+                if query_vec:
+                    for chunk, vec in zip(self._chunks, self._embeddings):
+                        score = _cosine_similarity(query_vec, vec)
+                        ranked.append((score, chunk))
+            if not ranked:
                 for chunk in self._chunks:
                     ranked.append((_keyword_score(query_stripped, chunk), chunk))
         else:
@@ -194,7 +178,6 @@ class PolicyRAGService:
         ]
         return PolicySearchResult(query=query, chunks=chunks, retrieval_mode=mode)
 
-
     @staticmethod
     def format_context(result: PolicySearchResult) -> str:
         if not result.chunks:
@@ -209,6 +192,9 @@ class PolicyRAGService:
 def reset_policy_rag_service() -> None:
     global _default_service
     _default_service = None
+    from backend.gemini_service import reset_gemini_client
+
+    reset_gemini_client()
 
 
 def get_policy_rag_service() -> PolicyRAGService:

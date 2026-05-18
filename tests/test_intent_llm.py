@@ -4,30 +4,25 @@ from backend.intent import ExtractedIntent, IntentKind, classify_intent
 
 
 @patch("backend.intent.get_settings")
-@patch("backend.intent.OpenAI")
-def test_classify_intent_uses_llm_when_configured(mock_openai_cls, mock_settings):
-    mock_settings.return_value.openai_api_key = "sk-test"
-    mock_client = MagicMock()
-    mock_openai_cls.return_value = mock_client
-    parsed = ExtractedIntent(intent=IntentKind.POLICY_QUESTION)
-    mock_client.beta.chat.completions.parse.return_value = MagicMock(
-        choices=[MagicMock(message=MagicMock(parsed=parsed))]
-    )
+@patch("backend.intent.generate_structured")
+def test_classify_intent_uses_gemini_when_configured(mock_generate, mock_settings):
+    mock_settings.return_value.has_google_api.return_value = True
+    mock_generate.return_value = ExtractedIntent(intent=IntentKind.POLICY_QUESTION)
 
     result = classify_intent("what is your refund policy?")
     assert result.intent == IntentKind.POLICY_QUESTION
-    mock_client.beta.chat.completions.parse.assert_called_once()
+    mock_generate.assert_called_once()
 
 
 @patch("backend.intent.get_settings")
+@patch("backend.intent.generate_structured")
 @patch("backend.intent.logger")
-def test_classify_intent_falls_back_on_llm_error(mock_logger, mock_settings):
-    mock_settings.return_value.openai_api_key = "sk-test"
-    with patch("backend.intent.OpenAI") as mock_openai_cls:
-        mock_client = MagicMock()
-        mock_openai_cls.return_value = mock_client
-        mock_client.beta.chat.completions.parse.side_effect = RuntimeError("api down")
+def test_classify_intent_falls_back_when_gemini_returns_none(
+    mock_logger, mock_generate, mock_settings
+):
+    mock_settings.return_value.has_google_api.return_value = True
+    mock_generate.return_value = None
 
-        result = classify_intent("refund policy")
-        assert result.intent == IntentKind.POLICY_QUESTION
+    result = classify_intent("refund policy")
+    assert result.intent == IntentKind.POLICY_QUESTION
     mock_logger.warning.assert_called()
