@@ -1,5 +1,7 @@
 # AI Car Concierge
 
+[![CI](https://github.com/ofirbts/ai-car-concierge/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ofirbts/ai-car-concierge/actions/workflows/ci.yml)
+
 Premium dealership chatbot: hybrid RAG (SQLite inventory + Gemini policy embeddings), structured Gemini intent extraction, Resend purchase automations, and strict 2022+ sales policy enforcement.
 
 ## Live links
