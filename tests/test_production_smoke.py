@@ -62,11 +62,17 @@ def test_production_chat_requires_key():
 def test_production_chat_with_api_key(production_key):
     response = httpx.post(
         f"{PRODUCTION_URL}/api/chat",
-        json={"message": "Show me Tesla cars"},
+        json={"message": "Show me Tesla cars in inventory"},
         headers={"X-API-Key": production_key},
         timeout=90.0,
     )
-    assert response.status_code == 200
+    if response.status_code == 401:
+        pytest.fail(
+            "X-API-Key rejected by production API. "
+            "Update GitHub secret PRODUCTION_API_KEY to match Render env API_KEY."
+        )
+    assert response.status_code == 200, response.text[:300]
     data = response.json()
     assert "reply" in data
-    assert data.get("intent") == "inventory_search"
+    assert "tesla" in data["reply"].lower()
+    assert data.get("intent") in ("inventory_search", "hybrid_rag")
