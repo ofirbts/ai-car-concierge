@@ -1,6 +1,7 @@
 import os
 
-os.environ["API_KEY"] = ""
+if os.environ.get("REQUIRE_PRODUCTION_API_KEY") != "true":
+    os.environ["API_KEY"] = ""
 os.environ.setdefault("GOOGLE_API_KEY", "")
 os.environ.setdefault("GEMINI_API_KEY", "")
 os.environ.setdefault("RESEND_API_KEY", "")
