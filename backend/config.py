@@ -49,7 +49,7 @@ def bootstrap() -> Settings:
     from dotenv import load_dotenv
 
     if ENV_FILE.is_file():
-        load_dotenv(ENV_FILE, override=True)
+        load_dotenv(ENV_FILE, override=False)
     reset_settings_cache()
     from backend.gemini_service import reset_gemini_client
     from backend.rag_service import reset_policy_rag_service

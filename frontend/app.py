@@ -9,7 +9,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 import httpx
 import streamlit as st
 
-from backend.chat_idempotency import stable_reserve_idempotency_key
+from backend.chat_idempotency import (
+    stable_purchase_idempotency_key,
+    stable_reserve_idempotency_key,
+)
 
 
 def _apply_streamlit_secrets() -> None:
@@ -59,6 +62,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "reserve_idempotency_keys" not in st.session_state:
     st.session_state.reserve_idempotency_keys = {}
+if "purchase_idempotency_keys" not in st.session_state:
+    st.session_state.purchase_idempotency_keys = {}
 
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -79,6 +84,14 @@ if prompt := st.chat_input("Ask about cars, policies, reservations…"):
     )
     if reserve_key:
         payload["idempotency_key"] = reserve_key
+    else:
+        purchase_key = stable_purchase_idempotency_key(
+            prompt,
+            user_email.strip() if user_email else None,
+            st.session_state.purchase_idempotency_keys,
+        )
+        if purchase_key:
+            payload["idempotency_key"] = purchase_key
     if user_email and user_email.strip():
         payload["user_email"] = user_email.strip()
 

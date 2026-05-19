@@ -1,0 +1,14 @@
+[
+  {"query": "refund policy deposit", "must_source": "faqs.md"},
+  {"query": "2022 sales policy pending de-listing", "must_heading_substr": "2022"},
+  {"query": "test drive appointment", "must_source": "faqs.md"},
+  {"query": "shipping delivery timeline", "must_source": "shipping.md"},
+  {"query": "maintenance warranty coverage", "must_source": "maintenance.md"},
+  {"query": "customer support contact", "must_source": "support.md"},
+  {"query": "cancel reservation fee", "must_source": "faqs.md"},
+  {"query": "trade in older vehicle", "must_source": "policy.md"},
+  {"query": "financing options", "must_source": "faqs.md"},
+  {"query": "vehicle return policy", "must_source": "policy.md"},
+  {"query": "delivery timeline shipping", "must_source": "shipping.md"},
+  {"query": "service interval schedule", "must_source": "maintenance.md"}
+]

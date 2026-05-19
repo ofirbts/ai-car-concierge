@@ -26,9 +26,10 @@ from backend.database import (
     reserve_vehicle,
     search_vehicles,
 )
-from backend.orchestrator import ChatRequest, ChatResponse, handle_chat
+from backend.orchestrator import ChatRequest, ChatResponse, handle_chat, log_chat_outcome
 from backend.rag_service import PolicyRAGService, get_policy_rag_service, load_policy_chunks, search_policies
 from backend.security import require_api_key
+from backend.middleware import RequestContextMiddleware
 
 bootstrap()
 
@@ -57,6 +58,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RequestContextMiddleware)
 
 
 def get_rag_service() -> PolicyRAGService:
@@ -184,7 +186,9 @@ class ReserveResponse(BaseModel):
 
 
 @app.post("/vehicles/{vehicle_id}/reserve", response_model=ReserveResponse)
+@limiter.limit("10/minute")
 def reserve(
+    request: Request,
     vehicle_id: int,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     _: None = Depends(require_api_key),
@@ -219,6 +223,7 @@ def chat(
     _: None = Depends(require_api_key),
 ):
     response = handle_chat(body, rag=rag)
+    log_chat_outcome(response)
     status = chat_http_status(response)
     return JSONResponse(status_code=status, content=response.model_dump(mode="json"))
 

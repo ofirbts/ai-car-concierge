@@ -113,9 +113,31 @@ pytest -q
 
 Supports `Idempotency-Key` header. Same key + same vehicle replays without double-decrementing stock.
 
-## Deploy
+## Local testing
 
-### API (Render)
+```bash
+pytest -q
+```
+
+CI runs without `.env`. With a local `.env` that sets `API_KEY`, tests still pass because `conftest.py` clears `API_KEY` for the suite. For production smoke against Render:
+
+```bash
+pytest tests/test_production_smoke.py -q
+```
+
+(requires `API_KEY` in `.env` or environment)
+
+## Deploy architecture (who does what)
+
+| Platform | Responsibility | URL |
+|----------|----------------|-----|
+| **Render Web Service (API)** | FastAPI, SQLite, Gemini, Resend, policy enforcement | https://ai-car-concierge-a073.onrender.com |
+| **Render Web Service (UI)** or **Streamlit Cloud** | Chat UI only — calls API with `BACKEND_URL` + `API_KEY` | UI URL after deploy |
+| **GitHub** | Source code + CI (`pytest`) | https://github.com/ofirbts/ai-car-concierge |
+
+**Blueprint** on Render = file `render.yaml` that defines services automatically when you sync the repo. You can also create each Web Service manually (same result).
+
+### API (Render) — already live
 
 1. Connect GitHub repo → New Web Service.
 2. Use `render.yaml` or Docker: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`.

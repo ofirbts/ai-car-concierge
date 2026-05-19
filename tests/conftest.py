@@ -1,7 +1,22 @@
+import os
+
+os.environ["API_KEY"] = ""
+os.environ.setdefault("GOOGLE_API_KEY", "")
+os.environ.setdefault("GEMINI_API_KEY", "")
+os.environ.setdefault("RESEND_API_KEY", "")
+
 import pytest
 from fastapi.testclient import TestClient
 
 from backend import database as db
+from backend.config import reset_settings_cache
+
+
+@pytest.fixture(autouse=True)
+def _reset_settings_each_test():
+    reset_settings_cache()
+    yield
+    reset_settings_cache()
 
 
 @pytest.fixture

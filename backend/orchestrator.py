@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
+
 from pydantic import BaseModel, EmailStr, Field
 
+from backend.audit import audit
 from backend.automations import send_purchase_email, send_purchase_inquiry_email
 from backend.database import (
     POLICY_BLOCK_MESSAGE,
@@ -14,6 +17,7 @@ from backend.database import (
     get_vehicle_by_id,
     reserve_vehicle,
     search_vehicles,
+    try_claim_purchase_notification,
 )
 from backend.intent import (
     ExtractedIntent,
@@ -24,6 +28,8 @@ from backend.intent_validate import normalize_extracted_intent
 from backend.llm_service import synthesize_reply
 from backend.rag_service import PolicyRAGService, get_policy_rag_service
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
     "IntentKind",
     "ExtractedIntent",
@@ -31,6 +37,7 @@ __all__ = [
     "ChatRequest",
     "ChatResponse",
     "handle_chat",
+    "log_chat_outcome",
 ]
 
 
@@ -82,6 +89,46 @@ def _finalize_reply(
         return fallback
     synthesized = synthesize_reply(user_message, context)
     return synthesized if synthesized else fallback
+
+
+def log_chat_outcome(response: ChatResponse) -> None:
+    logger.info(
+        "chat_outcome intent=%s blocked=%s rag_mode=%s email_sent=%s",
+        response.intent.value,
+        response.blocked,
+        response.rag_mode,
+        response.email_sent,
+    )
+
+
+def _purchase_email_allowed(
+    request: ChatRequest,
+    email: str,
+    vehicle_id: int | None,
+) -> bool:
+    key = request.idempotency_key
+    if not key:
+        return True
+    if try_claim_purchase_notification(key, email, vehicle_id):
+        return True
+    audit(
+        "purchase_email",
+        "replay",
+        vehicle_id=vehicle_id,
+        customer_email=email,
+    )
+    return False
+
+
+def _purchase_replay_response(intent: IntentKind) -> ChatResponse:
+    return ChatResponse(
+        reply=(
+            "We already received your purchase interest. "
+            "Our sales team will contact you."
+        ),
+        intent=intent,
+        email_sent=False,
+    )
 
 
 def _search_inventory(extracted: ExtractedIntent) -> list[Vehicle]:
@@ -248,6 +295,12 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
                 intent=extracted.intent,
             )
         if vehicle.pending_delisting:
+            audit(
+                "reserve",
+                "blocked",
+                vehicle_id=vehicle.id,
+                detail=POLICY_BLOCK_MESSAGE,
+            )
             return ChatResponse(
                 reply=(
                     f"Vehicle #{vehicle.id} ({vehicle.year} {vehicle.make} {vehicle.model}) "
@@ -264,6 +317,7 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
                 idempotency_key=request.idempotency_key,
             )
         except OutOfStockError:
+            audit("reserve", "blocked", vehicle_id=extracted.vehicle_id, detail="out_of_stock")
             return ChatResponse(
                 reply=f"Vehicle #{extracted.vehicle_id} is out of stock and cannot be reserved.",
                 intent=extracted.intent,
@@ -271,6 +325,7 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
                 blocked=True,
                 block_reason="out_of_stock",
             )
+        audit("reserve", "success", vehicle_id=reserved.id)
         return ChatResponse(
             reply=(
                 f"Reserved vehicle #{reserved.id}: {reserved.year} {reserved.make} "
@@ -326,6 +381,7 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
             try:
                 assert_sellable(vehicle)
             except PolicyViolationError as exc:
+                audit("purchase_email", "blocked", vehicle_id=vehicle.id, detail=str(exc))
                 return ChatResponse(
                     reply=str(exc),
                     intent=extracted.intent,
@@ -333,8 +389,11 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
                     blocked=True,
                     block_reason=str(exc),
                 )
+            if not _purchase_email_allowed(request, str(email), vehicle.id):
+                return _purchase_replay_response(extracted.intent)
             email_result = send_purchase_email(str(email), vehicle)
             if email_result.sent:
+                audit("purchase_email", "success", vehicle_id=vehicle.id, customer_email=str(email))
                 suffix = " Our sales team has been notified by email."
             elif email_result.error == "resend_not_configured":
                 suffix = " Purchase interest recorded (Resend API key not configured)."
@@ -350,6 +409,8 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
                 email_sent=email_result.sent,
                 email_error=email_result.error,
             )
+        if not _purchase_email_allowed(request, str(email), None):
+            return _purchase_replay_response(extracted.intent)
         email_result = send_purchase_inquiry_email(
             str(email),
             message,
@@ -357,6 +418,7 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
             model=extracted.model,
         )
         if email_result.sent:
+            audit("purchase_email", "success", customer_email=str(email), detail="inquiry")
             suffix = " Our sales team has been notified by email."
         elif email_result.error == "resend_not_configured":
             suffix = " Purchase interest recorded (Resend API key not configured)."
@@ -377,5 +439,4 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
         "policies (refunds, test drives, shipping), hybrid questions (price + refund policy), "
         "or say reserve vehicle #16 / buy vehicle #20 with your@email.com."
     )
-    reply = _finalize_reply(message, fallback, "General concierge capabilities.")
-    return ChatResponse(reply=reply, intent=IntentKind.GENERAL_CHAT)
+    return ChatResponse(reply=fallback, intent=IntentKind.GENERAL_CHAT)

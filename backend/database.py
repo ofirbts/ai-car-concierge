@@ -86,6 +86,28 @@ CREATE TABLE IF NOT EXISTS reservations (
 );
 """
 
+PURCHASE_NOTIFICATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS purchase_notifications (
+    idempotency_key TEXT PRIMARY KEY,
+    customer_email TEXT NOT NULL,
+    vehicle_id INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+ACTION_AUDIT_DDL = """
+CREATE TABLE IF NOT EXISTS action_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id TEXT,
+    action TEXT NOT NULL,
+    vehicle_id INTEGER,
+    customer_email TEXT,
+    outcome TEXT NOT NULL,
+    detail TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 
 def set_db_path(path: Path) -> None:
     global _db_path
@@ -135,10 +157,67 @@ def init_db(force: bool = False) -> None:
 def ensure_app_tables() -> None:
     conn = get_connection()
     try:
-        conn.executescript(RESERVATIONS_DDL)
+        conn.executescript(
+            RESERVATIONS_DDL + PURCHASE_NOTIFICATIONS_DDL + ACTION_AUDIT_DDL
+        )
         conn.commit()
     finally:
         conn.close()
+
+
+def try_claim_purchase_notification(
+    idempotency_key: str,
+    customer_email: str,
+    vehicle_id: int | None,
+) -> bool:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO purchase_notifications (idempotency_key, customer_email, vehicle_id)
+            VALUES (?, ?, ?)
+            """,
+            (idempotency_key, customer_email, vehicle_id),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def record_audit(
+    request_id: str,
+    action: str,
+    outcome: str,
+    *,
+    vehicle_id: int | None = None,
+    customer_email: str | None = None,
+    detail: str | None = None,
+) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO action_audit (
+                request_id, action, vehicle_id, customer_email, outcome, detail
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (request_id, action, vehicle_id, customer_email, outcome, detail),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def count_audit_rows() -> int:
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT COUNT(*) AS c FROM action_audit").fetchone()
+    finally:
+        conn.close()
+    return int(row["c"]) if row else 0
 
 
 def assert_sellable(vehicle: Vehicle) -> None:

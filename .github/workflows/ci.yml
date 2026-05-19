@@ -11,15 +11,16 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      API_KEY: ""
+      GOOGLE_API_KEY: ""
+      GEMINI_API_KEY: ""
+      RESEND_API_KEY: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: pytest -q
-        env:
-          GOOGLE_API_KEY: ""
-          GEMINI_API_KEY: ""
-          RESEND_API_KEY: ""
-          API_KEY: ""
+      - run: pip install pip-audit && pip-audit -r requirements.txt --disable-pip || true
+      - run: pytest -q --ignore=tests/test_production_smoke.py
+      - run: pytest -q tests/test_production_smoke.py::test_production_ready
