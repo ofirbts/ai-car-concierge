@@ -21,3 +21,15 @@ services:
         value: 30/minute
       - key: CORS_ORIGINS
         value: "*"
+
+  - type: web
+    name: ai-car-concierge-ui
+    runtime: docker
+    dockerfilePath: ./Dockerfile.streamlit
+    healthCheckPath: /
+    plan: free
+    envVars:
+      - key: BACKEND_URL
+        value: https://ai-car-concierge-a073.onrender.com
+      - key: API_KEY
+        sync: false

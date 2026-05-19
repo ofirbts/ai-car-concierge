@@ -10,8 +10,7 @@ __pycache__
 car_inventory.db
 car_inventory.db.sqlhash
 *.db.sqlhash
-.streamlit
-frontend/
+.streamlit/secrets.toml
 terminals/
 .cursor
 *.md

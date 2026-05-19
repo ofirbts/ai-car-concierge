@@ -8,7 +8,8 @@ Premium dealership chatbot: hybrid RAG (SQLite inventory + Gemini policy embeddi
 |---------|-----|
 | **API (Render)** | https://ai-car-concierge-a073.onrender.com |
 | **API docs** | https://ai-car-concierge-a073.onrender.com/docs |
-| **Streamlit UI** | _Set after Streamlit Cloud deploy_ |
+| **Streamlit UI (Render)** | _Deploy `ai-car-concierge-ui` from Blueprint — URL after deploy_ |
+| **Streamlit Cloud (alt.)** | [share.streamlit.io](https://share.streamlit.io) → `frontend/app.py` + secrets |
 | **GitHub** | https://github.com/ofirbts/ai-car-concierge |
 
 ## Assignment checklist
@@ -121,10 +122,25 @@ Supports `Idempotency-Key` header. Same key + same vehicle replays without doubl
 3. Set secrets: `GOOGLE_API_KEY`, `RESEND_*`, optional `API_KEY`.
 4. Health check: `/ready`.
 
-### UI (Streamlit Cloud)
+### UI (Render — recommended)
 
-1. App path: `frontend/app.py`.
-2. Secrets: `BACKEND_URL=https://your-api.onrender.com`, `API_KEY` if enabled.
+1. Dashboard → **Blueprints** → sync repo (or **New Web Service**).
+2. Service `ai-car-concierge-ui` uses `Dockerfile.streamlit`.
+3. Environment (required):
+   - `BACKEND_URL` = `https://ai-car-concierge-a073.onrender.com`
+   - `API_KEY` = same value as on the API service
+4. Health check: `/` (Streamlit root).
+5. After deploy, open the UI URL (e.g. `https://ai-car-concierge-ui.onrender.com`).
+
+### UI (Streamlit Cloud — alternative)
+
+1. [share.streamlit.io](https://share.streamlit.io) → New app → repo `ofirbts/ai-car-concierge`.
+2. Main file: `frontend/app.py`, branch `main`.
+3. Secrets:
+   ```toml
+   BACKEND_URL = "https://ai-car-concierge-a073.onrender.com"
+   API_KEY = "your-api-key"
+   ```
 
 ## 24-hour build narrative
 
