@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 
 def test_root_lists_entrypoints(api_client):
     response = api_client.get("/")
@@ -124,6 +126,25 @@ def test_chat_purchase_blocked_pre_2022_returns_409(api_client):
     data = response.json()
     assert data["blocked"] is True
     assert data["email_sent"] is False
+
+
+def test_chat_purchase_inquiry_without_vehicle_sends_email(api_client):
+    with patch("backend.orchestrator.send_purchase_inquiry_email") as mock_inquiry:
+        from backend.automations import EmailResult
+
+        mock_inquiry.return_value = EmailResult(sent=True)
+        response = api_client.post(
+            "/api/chat",
+            json={
+                "message": "I want to buy a family SUV",
+                "user_email": "buyer@example.com",
+            },
+        )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["intent"] == "purchase_intent"
+    assert data["email_sent"] is True
+    mock_inquiry.assert_called_once()
 
 
 def test_policies_search_endpoint(api_client):

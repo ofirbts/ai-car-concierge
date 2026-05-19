@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, EmailStr, Field
 
-from backend.automations import send_purchase_email
+from backend.automations import send_purchase_email, send_purchase_inquiry_email
 from backend.database import (
     POLICY_BLOCK_MESSAGE,
     SALES_MIN_YEAR,
@@ -20,6 +20,7 @@ from backend.intent import (
     IntentKind,
     classify_intent,
 )
+from backend.intent_validate import normalize_extracted_intent
 from backend.llm_service import synthesize_reply
 from backend.rag_service import PolicyRAGService, get_policy_rag_service
 
@@ -36,6 +37,7 @@ __all__ = [
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     user_email: EmailStr | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class ChatResponse(BaseModel):
@@ -205,7 +207,7 @@ def _handle_policy(message: str, rag: PolicyRAGService) -> ChatResponse:
         )
         return ChatResponse(reply=fallback, intent=IntentKind.POLICY_QUESTION, rag_mode=rag_mode)
     fallback = f"From our policy documents:\n\n{policy_ctx}"
-    reply = _finalize_reply(message, fallback, policy_ctx)
+    reply = _finalize_reply(message, fallback, policy_ctx, allow_synthesis=False)
     return ChatResponse(
         reply=reply,
         intent=IntentKind.POLICY_QUESTION,
@@ -216,7 +218,9 @@ def _handle_policy(message: str, rag: PolicyRAGService) -> ChatResponse:
 
 def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> ChatResponse:
     service = rag if rag is not None else get_policy_rag_service()
-    extracted = classify_intent(request.message, request.user_email)
+    extracted = normalize_extracted_intent(
+        classify_intent(request.message, request.user_email)
+    )
     message = request.message
 
     if extracted.intent == IntentKind.HYBRID_RAG:
@@ -255,7 +259,10 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
                 block_reason=POLICY_BLOCK_MESSAGE,
             )
         try:
-            reserved = reserve_vehicle(extracted.vehicle_id)
+            reserved = reserve_vehicle(
+                extracted.vehicle_id,
+                idempotency_key=request.idempotency_key,
+            )
         except OutOfStockError:
             return ChatResponse(
                 reply=f"Vehicle #{extracted.vehicle_id} is out of stock and cannot be reserved.",
@@ -343,13 +350,26 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
                 email_sent=email_result.sent,
                 email_error=email_result.error,
             )
+        email_result = send_purchase_inquiry_email(
+            str(email),
+            message,
+            make=extracted.make,
+            model=extracted.model,
+        )
+        if email_result.sent:
+            suffix = " Our sales team has been notified by email."
+        elif email_result.error == "resend_not_configured":
+            suffix = " Purchase interest recorded (Resend API key not configured)."
+        else:
+            suffix = f" Purchase interest recorded (email failed: {email_result.error})."
         return ChatResponse(
             reply=(
-                f"Thank you, {email}. A sales specialist will contact you within one business day. "
+                f"Thank you, {email}. A sales specialist will contact you within one business day.{suffix} "
                 "Specify a vehicle id or model for faster matching."
             ),
             intent=extracted.intent,
-            email_sent=False,
+            email_sent=email_result.sent,
+            email_error=email_result.error,
         )
 
     fallback = (

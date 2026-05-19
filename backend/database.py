@@ -74,6 +74,19 @@ class PolicyViolationError(Exception):
         super().__init__(message)
 
 
+class IdempotencyConflictError(Exception):
+    pass
+
+
+RESERVATIONS_DDL = """
+CREATE TABLE IF NOT EXISTS reservations (
+    idempotency_key TEXT PRIMARY KEY,
+    vehicle_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
+
 def set_db_path(path: Path) -> None:
     global _db_path
     _db_path = path
@@ -104,6 +117,7 @@ def init_db(force: bool = False) -> None:
     hash_path = _hash_path()
     if _db_path.exists() and not force:
         if hash_path.is_file() and hash_path.read_text(encoding="utf-8") == current_hash:
+            ensure_app_tables()
             return
     script = SQL_PATH.read_text(encoding="utf-8")
     if _db_path.exists():
@@ -115,6 +129,16 @@ def init_db(force: bool = False) -> None:
     finally:
         conn.close()
     hash_path.write_text(current_hash, encoding="utf-8")
+    ensure_app_tables()
+
+
+def ensure_app_tables() -> None:
+    conn = get_connection()
+    try:
+        conn.executescript(RESERVATIONS_DDL)
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def assert_sellable(vehicle: Vehicle) -> None:
@@ -201,16 +225,72 @@ def get_vehicle_by_id(vehicle_id: int) -> Vehicle | None:
     return _row_to_vehicle(row)
 
 
-def reserve_vehicle(vehicle_id: int) -> Vehicle:
-    vehicle = get_vehicle_by_id(vehicle_id)
-    if vehicle is None:
-        raise VehicleNotFoundError(f"Vehicle {vehicle_id} not found")
-    assert_sellable(vehicle)
-    if vehicle.stock_count <= 0:
-        raise OutOfStockError(f"Vehicle {vehicle_id} is out of stock")
+def make_exists_in_inventory(make: str) -> bool:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM vehicles WHERE LOWER(make) LIKE LOWER(?) LIMIT 1",
+            (f"%{make.strip()}%",),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def model_exists_for_make(make: str, model: str) -> bool:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT 1 FROM vehicles
+            WHERE LOWER(make) LIKE LOWER(?) AND LOWER(model) LIKE LOWER(?)
+            LIMIT 1
+            """,
+            (f"%{make.strip()}%", f"%{model.strip()}%"),
+        ).fetchone()
+    finally:
+        conn.close()
+    return row is not None
+
+
+def _get_reservation_vehicle_id(idempotency_key: str) -> int | None:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            "SELECT vehicle_id FROM reservations WHERE idempotency_key = ?",
+            (idempotency_key,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row["vehicle_id"]) if row else None
+
+
+def reserve_vehicle(vehicle_id: int, idempotency_key: str | None = None) -> Vehicle:
+    if idempotency_key:
+        existing_vehicle_id = _get_reservation_vehicle_id(idempotency_key)
+        if existing_vehicle_id is not None:
+            if existing_vehicle_id != vehicle_id:
+                raise IdempotencyConflictError(
+                    f"Idempotency key already used for vehicle #{existing_vehicle_id}"
+                )
+            vehicle = get_vehicle_by_id(existing_vehicle_id)
+            if vehicle is None:
+                raise VehicleNotFoundError(f"Vehicle {existing_vehicle_id} not found")
+            return vehicle
 
     conn = get_connection()
     try:
+        row = conn.execute(
+            "SELECT * FROM vehicles WHERE id = ?",
+            (vehicle_id,),
+        ).fetchone()
+        if row is None:
+            raise VehicleNotFoundError(f"Vehicle {vehicle_id} not found")
+        vehicle = _row_to_vehicle(row)
+        assert_sellable(vehicle)
+        if vehicle.stock_count <= 0:
+            raise OutOfStockError(f"Vehicle {vehicle_id} is out of stock")
+
         cursor = conn.execute(
             """
             UPDATE vehicles
@@ -219,9 +299,15 @@ def reserve_vehicle(vehicle_id: int) -> Vehicle:
             """,
             (vehicle_id,),
         )
-        conn.commit()
         if cursor.rowcount == 0:
             raise OutOfStockError(f"Vehicle {vehicle_id} is out of stock")
+
+        if idempotency_key:
+            conn.execute(
+                "INSERT INTO reservations (idempotency_key, vehicle_id) VALUES (?, ?)",
+                (idempotency_key, vehicle_id),
+            )
+        conn.commit()
     finally:
         conn.close()
 

@@ -15,3 +15,9 @@ services:
         sync: false
       - key: RESEND_TO_EMAIL
         sync: false
+      - key: API_KEY
+        sync: false
+      - key: CHAT_RATE_LIMIT
+        value: 30/minute
+      - key: CORS_ORIGINS
+        value: "*"

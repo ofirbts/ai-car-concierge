@@ -25,3 +25,24 @@ def test_hybrid_skips_llm_synthesis(mock_synth, isolated_db):
     )
     mock_synth.assert_not_called()
     assert response.intent.value == "hybrid_rag"
+
+
+@patch("backend.orchestrator.synthesize_reply")
+def test_policy_skips_llm_synthesis(mock_synth, isolated_db):
+    handle_chat(
+        ChatRequest(message="What is your refund policy for deposits?"),
+        rag=PolicyRAGService(use_embeddings=False),
+    )
+    mock_synth.assert_not_called()
+
+
+@patch("backend.orchestrator.synthesize_reply")
+def test_general_chat_uses_llm_synthesis(mock_synth, isolated_db):
+    mock_synth.return_value = "Polished greeting from Gemini."
+    response = handle_chat(
+        ChatRequest(message="Hello, what can you help me with?"),
+        rag=PolicyRAGService(use_embeddings=False),
+    )
+    mock_synth.assert_called_once()
+    assert response.reply == "Polished greeting from Gemini."
+    assert response.intent.value == "general_chat"

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     backend_url: str = "http://127.0.0.1:8000"
     show_debug_meta: bool = False
     use_quality_llm: bool = False
+    api_key: str = Field(default="", validation_alias="API_KEY")
+    chat_rate_limit: str = Field(default="30/minute", validation_alias="CHAT_RATE_LIMIT")
+    cors_origins: str = Field(default="*", validation_alias="CORS_ORIGINS")
 
     def has_google_api(self) -> bool:
         return bool(self.google_api_key.strip())

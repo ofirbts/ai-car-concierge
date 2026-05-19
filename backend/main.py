@@ -1,14 +1,19 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from backend.chat_http import chat_http_status
-from backend.config import bootstrap
+from backend.config import bootstrap, get_settings
 from backend.database import (
+    IdempotencyConflictError,
     OutOfStockError,
     PolicyViolationError,
     Vehicle,
@@ -23,23 +28,43 @@ from backend.database import (
 )
 from backend.orchestrator import ChatRequest, ChatResponse, handle_chat
 from backend.rag_service import PolicyRAGService, get_policy_rag_service, load_policy_chunks, search_policies
+from backend.security import require_api_key
+
+bootstrap()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+limiter = Limiter(key_func=get_remote_address)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    bootstrap()
     init_db()
     yield
 
 
-app = FastAPI(title="AI Car Concierge", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="AI Car Concierge", version="1.0.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+settings = get_settings()
+origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins or ["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def get_rag_service() -> PolicyRAGService:
     return get_policy_rag_service()
+
+
+def chat_rate_limit() -> str:
+    return get_settings().chat_rate_limit
 
 
 @app.exception_handler(PolicyViolationError)
@@ -48,6 +73,11 @@ async def policy_violation_handler(_request: Request, exc: PolicyViolationError)
         status_code=409,
         content={"error": str(exc), "vehicle_id": exc.vehicle_id},
     )
+
+
+@app.exception_handler(IdempotencyConflictError)
+async def idempotency_conflict_handler(_request: Request, exc: IdempotencyConflictError):
+    return JSONResponse(status_code=409, content={"error": str(exc)})
 
 
 @app.exception_handler(VehicleNotFoundError)
@@ -79,7 +109,7 @@ def root():
         "health": "/health",
         "ready": "/ready",
         "chat": "POST /api/chat",
-        "ui_hint": "Run Streamlit separately: streamlit run frontend/app.py → http://127.0.0.1:8501",
+        "ui_hint": "Deploy Streamlit with BACKEND_URL pointing here",
     }
 
 
@@ -121,6 +151,7 @@ def list_vehicles(
     in_stock_only: bool = False,
     limit: int = Query(default=20, ge=1, le=100),
     sort: VehicleSort = VehicleSort.YEAR_DESC_PRICE_ASC,
+    _: None = Depends(require_api_key),
 ):
     filters = VehicleSearchFilters(
         make=make,
@@ -140,7 +171,7 @@ def list_vehicles(
 
 
 @app.get("/vehicles/{vehicle_id}", response_model=Vehicle)
-def get_vehicle(vehicle_id: int):
+def get_vehicle(vehicle_id: int, _: None = Depends(require_api_key)):
     vehicle = get_vehicle_by_id(vehicle_id)
     if vehicle is None:
         raise VehicleNotFoundError(f"Vehicle {vehicle_id} not found")
@@ -153,8 +184,12 @@ class ReserveResponse(BaseModel):
 
 
 @app.post("/vehicles/{vehicle_id}/reserve", response_model=ReserveResponse)
-def reserve(vehicle_id: int):
-    vehicle = reserve_vehicle(vehicle_id)
+def reserve(
+    vehicle_id: int,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    _: None = Depends(require_api_key),
+):
+    vehicle = reserve_vehicle(vehicle_id, idempotency_key=idempotency_key)
     return ReserveResponse(
         vehicle=vehicle,
         message=f"Reserved. Remaining stock: {vehicle.stock_count}.",
@@ -166,20 +201,32 @@ def reserve(vehicle_id: int):
     responses={
         200: {
             "model": ChatResponse,
-            "description": "Success, or legacy-year informational reply (check blocked in body)",
+            "description": "Success or legacy-year informational (check blocked in body)",
         },
         409: {
             "model": ChatResponse,
-            "description": "Reserve or purchase blocked (policy or out of stock); reply explains why",
+            "description": "Reserve or purchase blocked",
         },
+        401: {"description": "Missing or invalid X-API-Key when API_KEY is configured"},
+        429: {"description": "Rate limit exceeded"},
     },
 )
-def chat(request: ChatRequest, rag: PolicyRAGService = Depends(get_rag_service)):
-    response = handle_chat(request, rag=rag)
+@limiter.limit(chat_rate_limit)
+def chat(
+    request: Request,
+    body: ChatRequest,
+    rag: PolicyRAGService = Depends(get_rag_service),
+    _: None = Depends(require_api_key),
+):
+    response = handle_chat(body, rag=rag)
     status = chat_http_status(response)
     return JSONResponse(status_code=status, content=response.model_dump(mode="json"))
 
 
 @app.get("/policies/search")
-def policies_search(q: str = Query(min_length=1), top_k: int = Query(default=3, ge=1, le=10)):
+def policies_search(
+    q: str = Query(min_length=1),
+    top_k: int = Query(default=3, ge=1, le=10),
+    _: None = Depends(require_api_key),
+):
     return search_policies(q, top_k=top_k)
