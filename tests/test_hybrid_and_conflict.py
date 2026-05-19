@@ -10,6 +10,22 @@ def test_classify_hybrid_intent_without_legacy_year():
     assert intent.intent == IntentKind.HYBRID_RAG
 
 
+def test_model_3_alias_sets_tesla(isolated_db):
+    intent = classify_intent_rule_based("Model 3 price and refund policy")
+    assert intent.intent == IntentKind.HYBRID_RAG
+    assert intent.make == "Tesla"
+    assert intent.model == "Model 3"
+
+
+def test_hybrid_model_3_inventory_filtered(isolated_db):
+    response = handle_chat(
+        ChatRequest(message="Model 3 price and refund policy"),
+        rag=PolicyRAGService(use_embeddings=False),
+    )
+    assert response.intent == IntentKind.HYBRID_RAG
+    assert all("Tesla" in v.make for v in response.vehicles)
+
+
 def test_classify_hybrid_with_2020_becomes_legacy_conflict():
     intent = classify_intent_rule_based(
         "2020 Tesla price and what is your refund policy?"

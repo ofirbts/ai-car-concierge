@@ -114,6 +114,10 @@ def _inventory_makes() -> list[str]:
 
 def extract_make_model(message: str) -> tuple[str | None, str | None]:
     lower = message.lower()
+    if re.search(r"\bmodel\s*3\b", lower):
+        return "Tesla", "Model 3"
+    if re.search(r"\bmodel\s*y\b", lower):
+        return "Tesla", "Model Y"
     found_make: str | None = None
     for make in _inventory_makes():
         if make.lower() in lower:
