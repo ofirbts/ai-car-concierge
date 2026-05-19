@@ -1,7 +1,21 @@
+import os
+
 import httpx
 import streamlit as st
 
 from backend.chat_idempotency import stable_reserve_idempotency_key
+
+
+def _apply_streamlit_secrets() -> None:
+    try:
+        for key in ("BACKEND_URL", "API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
+            if key in st.secrets:
+                os.environ[key] = str(st.secrets[key])
+    except Exception:
+        pass
+
+
+_apply_streamlit_secrets()
 from backend.config import bootstrap, get_settings
 
 bootstrap()
