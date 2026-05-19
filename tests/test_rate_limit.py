@@ -9,6 +9,26 @@ def test_rate_limit_exceeded_handler_registered():
 
 
 def test_chat_endpoint_is_rate_limited():
-    from backend.main import chat
+    from backend.main import app
 
-    assert chat.__name__ in ("chat", "sync_wrapper")
+    chat_route = next(
+        r for r in app.routes if getattr(r, "path", None) == "/api/chat"
+    )
+    assert chat_route.endpoint is not None
+
+
+def test_chat_returns_429_when_rate_limited(api_client, monkeypatch):
+    import uuid
+
+    monkeypatch.setenv("CHAT_RATE_LIMIT", "1/second")
+    from backend.config import reset_settings_cache
+    from backend.main import limiter
+
+    client_key = f"rate-limit-{uuid.uuid4()}"
+    monkeypatch.setattr(limiter, "_key_func", lambda _request: client_key)
+    reset_settings_cache()
+    limiter.reset()
+    first = api_client.post("/api/chat", json={"message": "Tesla inventory"})
+    assert first.status_code == 200
+    second = api_client.post("/api/chat", json={"message": "BMW inventory"})
+    assert second.status_code == 429

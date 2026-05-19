@@ -4,6 +4,7 @@ def test_reserve_chat_idempotent_stock(api_client):
     first = api_client.post("/api/chat", json=payload)
     second = api_client.post("/api/chat", json=payload)
     assert first.status_code == 200
+    assert "request_id" in first.json()
     assert second.status_code == 200
     after = api_client.get("/vehicles/16").json()["stock_count"]
     assert after == before - 1

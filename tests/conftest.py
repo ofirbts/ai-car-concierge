@@ -10,6 +10,11 @@ from fastapi.testclient import TestClient
 
 from backend import database as db
 from backend.config import reset_settings_cache
+from backend.intent import _inventory_makes
+
+
+def _clear_inventory_makes_cache() -> None:
+    _inventory_makes.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -19,12 +24,22 @@ def _reset_settings_each_test():
     reset_settings_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    from backend.main import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
 @pytest.fixture
 def isolated_db(tmp_path):
     old_path = db.get_db_path()
     db_path = tmp_path / "test_inventory.db"
     db.set_db_path(db_path)
     db.init_db(force=True)
+    _clear_inventory_makes_cache()
     yield db_path
     hash_path = db_path.with_suffix(db_path.suffix + ".sqlhash")
     if hash_path.exists():
@@ -43,6 +58,7 @@ def _init_inventory_for_tests(request, tmp_path):
     db_path = tmp_path / "autouse_inventory.db"
     db.set_db_path(db_path)
     db.init_db(force=True)
+    _clear_inventory_makes_cache()
     yield
     hash_path = db_path.with_suffix(db_path.suffix + ".sqlhash")
     if hash_path.exists():

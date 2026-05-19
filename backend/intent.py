@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from enum import Enum
+from functools import lru_cache
 
 from pydantic import BaseModel, EmailStr
 
@@ -106,10 +107,11 @@ def extract_price_max(message: str) -> float | None:
     return None
 
 
-def _inventory_makes() -> list[str]:
+@lru_cache(maxsize=1)
+def _inventory_makes() -> tuple[str, ...]:
     from backend.database import list_distinct_makes
 
-    return list_distinct_makes()
+    return tuple(list_distinct_makes())
 
 
 def extract_make_model(message: str) -> tuple[str | None, str | None]:

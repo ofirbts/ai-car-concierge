@@ -25,7 +25,6 @@ from backend.intent import (
     classify_intent,
 )
 from backend.intent_validate import normalize_extracted_intent
-from backend.llm_service import synthesize_reply
 from backend.rag_service import PolicyRAGService, get_policy_rag_service
 
 logger = logging.getLogger(__name__)
@@ -76,19 +75,6 @@ def _policy_context(message: str, rag: PolicyRAGService) -> tuple[str, bool, str
     result = rag.search(message, top_k=3)
     context = PolicyRAGService.format_context(result)
     return context, bool(context), result.retrieval_mode
-
-
-def _finalize_reply(
-    user_message: str,
-    fallback: str,
-    context: str,
-    *,
-    allow_synthesis: bool = True,
-) -> str:
-    if not allow_synthesis:
-        return fallback
-    synthesized = synthesize_reply(user_message, context)
-    return synthesized if synthesized else fallback
 
 
 def log_chat_outcome(response: ChatResponse) -> None:
@@ -171,7 +157,7 @@ def _handle_inventory(
             "and cannot be sold or reserved per our 2022+ Sales Policy."
         )
     context = f"Inventory results:\n{inventory_block}"
-    reply = _finalize_reply(message, fallback, context, allow_synthesis=False)
+    reply = fallback
     return ChatResponse(reply=reply, intent=intent, vehicles=vehicles, rag_mode="sqlite")
 
 
@@ -202,7 +188,7 @@ def _handle_legacy_year_conflict(
         f"{policy_ctx}\n\nPre-2022 inventory:\n{legacy_block}\n\n"
         f"Sellable alternatives:\n{alt_block}"
     )
-    reply = _finalize_reply(message, fallback, context, allow_synthesis=False)
+    reply = fallback
     return ChatResponse(
         reply=reply,
         intent=IntentKind.LEGACY_YEAR_CONFLICT,
@@ -235,7 +221,7 @@ def _handle_hybrid(
         f"Structured inventory query results:\n{inventory_block}\n\n"
         f"Relevant policy excerpts:\n{policy_ctx or 'none'}"
     )
-    reply = _finalize_reply(message, fallback, context, allow_synthesis=False)
+    reply = fallback
     return ChatResponse(
         reply=reply,
         intent=IntentKind.HYBRID_RAG,
@@ -254,7 +240,7 @@ def _handle_policy(message: str, rag: PolicyRAGService) -> ChatResponse:
         )
         return ChatResponse(reply=fallback, intent=IntentKind.POLICY_QUESTION, rag_mode=rag_mode)
     fallback = f"From our policy documents:\n\n{policy_ctx}"
-    reply = _finalize_reply(message, fallback, policy_ctx, allow_synthesis=False)
+    reply = fallback
     return ChatResponse(
         reply=reply,
         intent=IntentKind.POLICY_QUESTION,

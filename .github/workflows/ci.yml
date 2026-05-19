@@ -21,6 +21,20 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: pip install pip-audit && pip-audit -r requirements.txt --disable-pip || true
+      - run: pip install pip-audit && pip-audit -r requirements.txt
       - run: pytest -q --ignore=tests/test_production_smoke.py
       - run: pytest -q tests/test_production_smoke.py::test_production_ready
+      - run: pytest -q tests/test_production_smoke.py::test_production_chat_requires_key
+
+  smoke-prod:
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && secrets.PRODUCTION_API_KEY != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest tests/test_production_smoke.py -q
+        env:
+          API_KEY: ${{ secrets.PRODUCTION_API_KEY }}

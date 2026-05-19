@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, Query, Request
@@ -26,12 +27,11 @@ from backend.database import (
     reserve_vehicle,
     search_vehicles,
 )
+from backend.middleware import RequestContextMiddleware
 from backend.orchestrator import ChatRequest, ChatResponse, handle_chat, log_chat_outcome
 from backend.rag_service import PolicyRAGService, get_policy_rag_service, load_policy_chunks, search_policies
+from backend.request_context import get_request_id
 from backend.security import require_api_key
-from backend.middleware import RequestContextMiddleware
-
-bootstrap()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -39,199 +39,202 @@ logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    yield
-
-
-app = FastAPI(title="AI Car Concierge", version="1.0.0", lifespan=lifespan)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-settings = get_settings()
-origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins or ["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_middleware(RequestContextMiddleware)
-
-
 def get_rag_service() -> PolicyRAGService:
     return get_policy_rag_service()
 
 
-def chat_rate_limit() -> str:
-    return get_settings().chat_rate_limit
+@asynccontextmanager
+async def lifespan(application: FastAPI):
+    init_db()
+    yield
 
 
-@app.exception_handler(PolicyViolationError)
-async def policy_violation_handler(_request: Request, exc: PolicyViolationError):
-    return JSONResponse(
-        status_code=409,
-        content={"error": str(exc), "vehicle_id": exc.vehicle_id},
+def create_app() -> FastAPI:
+    bootstrap()
+    settings = get_settings()
+    cors_raw = settings.cors_origins or os.environ.get("CORS_ORIGINS", "*")
+    origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
+
+    application = FastAPI(title="AI Car Concierge", version="1.0.0", lifespan=lifespan)
+    application.state.limiter = limiter
+    application.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins or ["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
+    application.add_middleware(RequestContextMiddleware)
 
+    def _error_content(message: str, **extra: object) -> dict:
+        body: dict = {"error": message, "request_id": get_request_id()}
+        body.update(extra)
+        return body
 
-@app.exception_handler(IdempotencyConflictError)
-async def idempotency_conflict_handler(_request: Request, exc: IdempotencyConflictError):
-    return JSONResponse(status_code=409, content={"error": str(exc)})
-
-
-@app.exception_handler(VehicleNotFoundError)
-async def vehicle_not_found_handler(_request: Request, exc: VehicleNotFoundError):
-    return JSONResponse(status_code=404, content={"error": str(exc)})
-
-
-@app.exception_handler(OutOfStockError)
-async def out_of_stock_handler(_request: Request, exc: OutOfStockError):
-    return JSONResponse(status_code=409, content={"error": str(exc)})
-
-
-@app.exception_handler(RequestValidationError)
-async def validation_handler(_request: Request, exc: RequestValidationError):
-    return JSONResponse(status_code=422, content={"error": "Invalid request", "details": exc.errors()})
-
-
-@app.exception_handler(Exception)
-async def generic_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled error on %s", request.url.path)
-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
-
-
-@app.get("/")
-def root():
-    return {
-        "service": "AI Car Concierge API",
-        "docs": "/docs",
-        "health": "/health",
-        "ready": "/ready",
-        "chat": "POST /api/chat",
-        "ui_hint": "Deploy Streamlit with BACKEND_URL pointing here",
-    }
-
-
-@app.get("/health")
-def health():
-    return {"status": "ok"}
-
-
-@app.get("/ready")
-def ready():
-    try:
-        vehicles = count_vehicles()
-        policies = len(load_policy_chunks())
-        rag = get_policy_rag_service()
-    except Exception as exc:
+    @application.exception_handler(PolicyViolationError)
+    async def policy_violation_handler(_request: Request, exc: PolicyViolationError):
         return JSONResponse(
-            status_code=503,
-            content={"status": "not_ready", "error": str(exc)},
+            status_code=409,
+            content=_error_content(str(exc), vehicle_id=exc.vehicle_id),
         )
-    return {
-        "status": "ready",
-        "vehicles": vehicles,
-        "policy_chunks": policies,
-        "rag_mode": rag.retrieval_mode,
-    }
 
+    @application.exception_handler(IdempotencyConflictError)
+    async def idempotency_conflict_handler(_request: Request, exc: IdempotencyConflictError):
+        return JSONResponse(status_code=409, content=_error_content(str(exc)))
 
-@app.get("/vehicles", response_model=list[Vehicle])
-def list_vehicles(
-    make: str | None = None,
-    model: str | None = None,
-    year: int | None = None,
-    year_min: int | None = None,
-    year_max: int | None = None,
-    color: str | None = None,
-    fuel_type: str | None = None,
-    price_min: float | None = None,
-    price_max: float | None = None,
-    in_stock_only: bool = False,
-    limit: int = Query(default=20, ge=1, le=100),
-    sort: VehicleSort = VehicleSort.YEAR_DESC_PRICE_ASC,
-    _: None = Depends(require_api_key),
-):
-    filters = VehicleSearchFilters(
-        make=make,
-        model=model,
-        year=year,
-        year_min=year_min,
-        year_max=year_max,
-        color=color,
-        fuel_type=fuel_type,
-        price_min=price_min,
-        price_max=price_max,
-        in_stock_only=in_stock_only,
-        limit=limit,
-        sort=sort,
-    )
-    return search_vehicles(filters)
+    @application.exception_handler(VehicleNotFoundError)
+    async def vehicle_not_found_handler(_request: Request, exc: VehicleNotFoundError):
+        return JSONResponse(status_code=404, content=_error_content(str(exc)))
 
+    @application.exception_handler(OutOfStockError)
+    async def out_of_stock_handler(_request: Request, exc: OutOfStockError):
+        return JSONResponse(status_code=409, content=_error_content(str(exc)))
 
-@app.get("/vehicles/{vehicle_id}", response_model=Vehicle)
-def get_vehicle(vehicle_id: int, _: None = Depends(require_api_key)):
-    vehicle = get_vehicle_by_id(vehicle_id)
-    if vehicle is None:
-        raise VehicleNotFoundError(f"Vehicle {vehicle_id} not found")
-    return vehicle
+    @application.exception_handler(RequestValidationError)
+    async def validation_handler(_request: Request, exc: RequestValidationError):
+        return JSONResponse(
+            status_code=422,
+            content=_error_content("Invalid request", details=exc.errors()),
+        )
 
+    @application.exception_handler(Exception)
+    async def generic_handler(request: Request, exc: Exception):
+        logger.exception("Unhandled error on %s", request.url.path)
+        return JSONResponse(
+            status_code=500,
+            content=_error_content("Internal server error"),
+        )
 
-class ReserveResponse(BaseModel):
-    vehicle: Vehicle
-    message: str
+    def chat_rate_limit() -> str:
+        return get_settings().chat_rate_limit
 
+    @application.get("/")
+    def root():
+        return {
+            "service": "AI Car Concierge API",
+            "version": application.version,
+            "openapi": "/openapi.json",
+            "docs": "/docs",
+            "health": "/health",
+            "ready": "/ready",
+            "chat": "POST /api/chat",
+            "ui_hint": "Deploy Streamlit with BACKEND_URL pointing here",
+        }
 
-@app.post("/vehicles/{vehicle_id}/reserve", response_model=ReserveResponse)
-@limiter.limit("10/minute")
-def reserve(
-    request: Request,
-    vehicle_id: int,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    _: None = Depends(require_api_key),
-):
-    vehicle = reserve_vehicle(vehicle_id, idempotency_key=idempotency_key)
-    return ReserveResponse(
-        vehicle=vehicle,
-        message=f"Reserved. Remaining stock: {vehicle.stock_count}.",
-    )
+    @application.get("/health")
+    def health():
+        return {"status": "ok"}
 
+    @application.get("/ready")
+    def ready():
+        try:
+            vehicles = count_vehicles()
+            policies = len(load_policy_chunks())
+            rag = get_policy_rag_service()
+        except Exception as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready", "error": str(exc)},
+            )
+        return {
+            "status": "ready",
+            "vehicles": vehicles,
+            "policy_chunks": policies,
+            "rag_mode": rag.retrieval_mode,
+        }
 
-@app.post(
-    "/api/chat",
-    responses={
-        200: {
-            "model": ChatResponse,
-            "description": "Success or legacy-year informational (check blocked in body)",
+    @application.get("/vehicles", response_model=list[Vehicle])
+    def list_vehicles(
+        make: str | None = None,
+        model: str | None = None,
+        year: int | None = None,
+        year_min: int | None = None,
+        year_max: int | None = None,
+        color: str | None = None,
+        fuel_type: str | None = None,
+        price_min: float | None = None,
+        price_max: float | None = None,
+        in_stock_only: bool = False,
+        limit: int = Query(default=20, ge=1, le=100),
+        sort: VehicleSort = VehicleSort.YEAR_DESC_PRICE_ASC,
+        _: None = Depends(require_api_key),
+    ):
+        filters = VehicleSearchFilters(
+            make=make,
+            model=model,
+            year=year,
+            year_min=year_min,
+            year_max=year_max,
+            color=color,
+            fuel_type=fuel_type,
+            price_min=price_min,
+            price_max=price_max,
+            in_stock_only=in_stock_only,
+            limit=limit,
+            sort=sort,
+        )
+        return search_vehicles(filters)
+
+    @application.get("/vehicles/{vehicle_id}", response_model=Vehicle)
+    def get_vehicle(vehicle_id: int, _: None = Depends(require_api_key)):
+        vehicle = get_vehicle_by_id(vehicle_id)
+        if vehicle is None:
+            raise VehicleNotFoundError(f"Vehicle {vehicle_id} not found")
+        return vehicle
+
+    class ReserveResponse(BaseModel):
+        vehicle: Vehicle
+        message: str
+
+    @application.post("/vehicles/{vehicle_id}/reserve", response_model=ReserveResponse)
+    @limiter.limit("10/minute")
+    def reserve(
+        request: Request,
+        vehicle_id: int,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        _: None = Depends(require_api_key),
+    ):
+        vehicle = reserve_vehicle(vehicle_id, idempotency_key=idempotency_key)
+        return ReserveResponse(
+            vehicle=vehicle,
+            message=f"Reserved. Remaining stock: {vehicle.stock_count}.",
+        )
+
+    @application.post(
+        "/api/chat",
+        responses={
+            200: {
+                "description": "Success or legacy-year informational (check blocked in body)",
+            },
+            409: {"description": "Reserve or purchase blocked"},
+            401: {"description": "Missing or invalid X-API-Key when API_KEY is configured"},
+            429: {"description": "Rate limit exceeded"},
         },
-        409: {
-            "model": ChatResponse,
-            "description": "Reserve or purchase blocked",
-        },
-        401: {"description": "Missing or invalid X-API-Key when API_KEY is configured"},
-        429: {"description": "Rate limit exceeded"},
-    },
-)
-@limiter.limit(chat_rate_limit)
-def chat(
-    request: Request,
-    body: ChatRequest,
-    rag: PolicyRAGService = Depends(get_rag_service),
-    _: None = Depends(require_api_key),
-):
-    response = handle_chat(body, rag=rag)
-    log_chat_outcome(response)
-    status = chat_http_status(response)
-    return JSONResponse(status_code=status, content=response.model_dump(mode="json"))
+    )
+    @limiter.limit(chat_rate_limit)
+    def chat(
+        request: Request,
+        body: ChatRequest,
+        rag: PolicyRAGService = Depends(get_rag_service),
+        _: None = Depends(require_api_key),
+    ):
+        response = handle_chat(body, rag=rag)
+        log_chat_outcome(response)
+        status = chat_http_status(response)
+        content = response.model_dump(mode="json")
+        content["request_id"] = get_request_id()
+        return JSONResponse(status_code=status, content=content)
+
+    @application.get("/policies/search")
+    def policies_search(
+        q: str = Query(min_length=1),
+        top_k: int = Query(default=3, ge=1, le=10),
+        _: None = Depends(require_api_key),
+    ):
+        return search_policies(q, top_k=top_k)
+
+    return application
 
 
-@app.get("/policies/search")
-def policies_search(
-    q: str = Query(min_length=1),
-    top_k: int = Query(default=3, ge=1, le=10),
-    _: None = Depends(require_api_key),
-):
-    return search_policies(q, top_k=top_k)
+app = create_app()

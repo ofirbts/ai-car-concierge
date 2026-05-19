@@ -127,7 +127,9 @@ def _inventory_sql_hash() -> str:
 
 
 def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path)
+    conn = sqlite3.connect(_db_path, timeout=10.0, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -359,6 +361,7 @@ def reserve_vehicle(vehicle_id: int, idempotency_key: str | None = None) -> Vehi
 
     conn = get_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             "SELECT * FROM vehicles WHERE id = ?",
             (vehicle_id,),
@@ -387,6 +390,9 @@ def reserve_vehicle(vehicle_id: int, idempotency_key: str | None = None) -> Vehi
                 (idempotency_key, vehicle_id),
             )
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

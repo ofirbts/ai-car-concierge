@@ -6,6 +6,8 @@ def test_root_lists_entrypoints(api_client):
     assert response.status_code == 200
     data = response.json()
     assert data["docs"] == "/docs"
+    assert data["version"] == "1.0.0"
+    assert data["openapi"] == "/openapi.json"
     assert "chat" in data
 
 
@@ -43,7 +45,9 @@ def test_get_vehicle_by_id(api_client):
 def test_get_vehicle_not_found(api_client):
     response = api_client.get("/vehicles/99999")
     assert response.status_code == 404
-    assert "error" in response.json()
+    data = response.json()
+    assert "error" in data
+    assert data.get("request_id") == response.headers.get("X-Request-ID")
 
 
 def test_reserve_sellable_vehicle(api_client):
@@ -70,6 +74,17 @@ def test_chat_policy_question(api_client):
     assert data["intent"] == "policy_question"
     assert data["policy_context_used"] is True
     assert "refund" in data["reply"].lower()
+    assert data.get("request_id")
+
+
+def test_chat_response_includes_request_id(api_client):
+    response = api_client.post(
+        "/api/chat",
+        json={"message": "Hello"},
+    )
+    assert response.status_code == 200
+    assert response.headers.get("X-Request-ID")
+    assert response.json().get("request_id") == response.headers.get("X-Request-ID")
 
 
 def test_chat_inventory(api_client):

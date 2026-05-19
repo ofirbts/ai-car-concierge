@@ -1,3 +1,4 @@
+# Primary UI: Streamlit Cloud (https://ai-car-concierge.streamlit.app). Optional Render UI service removed to avoid duplicate deploy paths.
 services:
   - type: web
     name: ai-car-concierge-api
@@ -21,15 +22,3 @@ services:
         value: 30/minute
       - key: CORS_ORIGINS
         value: https://ai-car-concierge.streamlit.app
-
-  - type: web
-    name: ai-car-concierge-ui
-    runtime: docker
-    dockerfilePath: ./Dockerfile.streamlit
-    healthCheckPath: /
-    plan: free
-    envVars:
-      - key: BACKEND_URL
-        value: https://ai-car-concierge-a073.onrender.com
-      - key: API_KEY
-        sync: false
