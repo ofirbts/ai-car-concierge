@@ -213,8 +213,28 @@ GitHub Actions (`.github/workflows/ci.yml`):
 | Gemini errors / keyword RAG only | Missing or invalid `GOOGLE_API_KEY` | Set key on Render, redeploy |
 | Stock reset after redeploy | Disk not attached | Sync blueprint `render.yaml` disk on API service |
 
+## AI tools & 24-hour build (home task)
+
+**Tools used**
+
+| Tool | Role |
+|------|------|
+| **Cursor** | Primary IDE; scaffolding FastAPI/Streamlit, tests, refactors, deploy configs (`.cursorrules` in repo). |
+| **Google Gemini** (`gemini-2.5-flash`, `gemini-embedding-001`) | Structured intent (`ExtractedIntent`); policy chunk embeddings. Not used for inventory prices or paraphrasing policy text. |
+| **pytest + GitHub Actions** | Regression safety; production smoke against live Render URL. |
+
+**How AI accelerated the 24h timeline**
+
+- **Hours 0–4:** SQLite from `data/inventory.sql`, policy corpus under `data/policies/`, parameterized search, 2022+ enforcement tests (no Text-to-SQL).
+- **Hours 4–10:** Hybrid RAG (SQLite + `PolicyRAGService`), Gemini embeddings with keyword CI fallback, legacy-year conflict path.
+- **Hours 10–16:** Streamlit UI, orchestrator, Resend purchase/inquiry emails, reserve → `stock_count--`.
+- **Hours 16–20:** API key, rate limits, idempotency, CORS, Docker, Render + Streamlit Cloud deploy.
+- **Hours 20–24:** Test expansion, CI, deterministic replies (anti-hallucination), documentation, manual demo script.
+
+Full hour-by-hour notes: [docs/BUILD_LOG.md](docs/BUILD_LOG.md). Architecture tradeoffs: [docs/DECISIONS.md](docs/DECISIONS.md).
+
 ## AI transparency
 
 Built with Cursor. `.cursorrules` in the repo documents local dev conventions for Cursor; not required to run the app.
 
-Google Gemini (`google-genai`) for **intent extraction and embeddings only** — not for inventory prices or policy text shown to users. I removed LLM reply synthesis after review feedback: all customer-facing facts come from SQLite/RAG text. No Text-to-SQL.
+Google Gemini (`google-genai`) for **intent extraction and embeddings only** — not for inventory prices or policy text shown to users. All customer-facing facts come from SQLite/RAG text. No Text-to-SQL.

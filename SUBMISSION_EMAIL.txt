@@ -1,0 +1,28 @@
+Subject: AI Car Concierge — Home Task Submission (Ofir)
+
+Hi,
+
+Please find my submission for the AI Engineering Home Task — The AI Car Concierge.
+
+GitHub repository:
+https://github.com/ofirbts/ai-car-concierge
+
+Live application (public URLs):
+- Chat UI: https://ai-car-concierge.streamlit.app
+- API docs: https://ai-car-concierge-a073.onrender.com/docs
+
+Run locally: see README.md (venv, .env.example, uvicorn + streamlit, pytest -q).
+
+AI tools & 24-hour build: see README.md section "AI tools & 24-hour build" and docs/BUILD_LOG.md.
+
+Quick demo prompts (Streamlit):
+1. Do you have a 2020 BMW?
+2. Tesla under $70000
+3. Model 3 price and refund policy
+4. reserve vehicle #16
+5. buy vehicle #48 with reviewer@email.com
+
+API key for direct API testing: provided separately / via assessment portal (header: X-API-Key).
+
+Thank you for reviewing,
+Ofir
