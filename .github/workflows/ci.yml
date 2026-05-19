@@ -7,11 +7,13 @@ on:
     branches: [master, main]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       API_KEY: ""
       GOOGLE_API_KEY: ""
       GEMINI_API_KEY: ""
@@ -30,8 +32,6 @@ jobs:
   smoke-prod:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,7 +47,8 @@ jobs:
           echo "PRODUCTION_API_KEY is set (length ${#API_KEY})"
         env:
           API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
-      - run: pytest tests/test_production_smoke.py -v --tb=short
+      - name: Production smoke tests
+        run: pytest tests/test_production_smoke.py -q --tb=short
         env:
           API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
           REQUIRE_PRODUCTION_API_KEY: "true"
