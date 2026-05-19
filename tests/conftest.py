@@ -19,6 +19,24 @@ def isolated_db(tmp_path):
     db.set_db_path(old_path)
 
 
+@pytest.fixture(autouse=True)
+def _init_inventory_for_tests(request, tmp_path):
+    if "isolated_db" in request.fixturenames:
+        yield
+        return
+    old_path = db.get_db_path()
+    db_path = tmp_path / "autouse_inventory.db"
+    db.set_db_path(db_path)
+    db.init_db(force=True)
+    yield
+    hash_path = db_path.with_suffix(db_path.suffix + ".sqlhash")
+    if hash_path.exists():
+        hash_path.unlink()
+    if db_path.exists():
+        db_path.unlink()
+    db.set_db_path(old_path)
+
+
 @pytest.fixture
 def api_client(isolated_db):
     from backend.main import app
