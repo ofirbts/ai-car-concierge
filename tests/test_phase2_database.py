@@ -1,5 +1,10 @@
 from backend import database as db
-from backend.database import VehicleSearchFilters, VehicleSort
+from backend.database import DEFAULT_DB_PATH, VehicleSearchFilters, VehicleSort
+
+
+def test_default_db_path_is_under_data_dir():
+    assert DEFAULT_DB_PATH.name == "car_inventory.db"
+    assert DEFAULT_DB_PATH.parent.name == "data"
 
 
 def test_init_db_loads_hundred_vehicles(isolated_db):

@@ -5,6 +5,8 @@ __pycache__/
 .env
 car_inventory.db
 car_inventory.db.sqlhash
+data/car_inventory.db
+data/car_inventory.db.sqlhash
 *.db.sqlhash
 .DS_Store
 .streamlit/secrets.toml

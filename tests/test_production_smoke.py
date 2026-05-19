@@ -21,12 +21,25 @@ def _production_api_key() -> str:
     return key
 
 
+def _require_production_key_in_ci() -> None:
+    if os.environ.get("REQUIRE_PRODUCTION_API_KEY") == "true" and not _production_api_key():
+        pytest.fail(
+            "PRODUCTION_API_KEY GitHub secret is required for the smoke-prod CI job "
+            "(Settings → Secrets → Actions)."
+        )
+
+
 @pytest.fixture(scope="module")
 def production_key():
+    _require_production_key_in_ci()
     key = _production_api_key()
     if not key:
         pytest.skip("Set API_KEY in environment or .env for production smoke tests")
     return key
+
+
+def test_production_smoke_requires_api_key_secret_in_ci():
+    _require_production_key_in_ci()
 
 
 def test_production_ready():

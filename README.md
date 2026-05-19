@@ -76,18 +76,18 @@ See [docs/DECISIONS.md](docs/DECISIONS.md) for tradeoffs. Build timeline: [docs/
 
 ## Known limitations (MVP honesty)
 
-- **SQLite on Render:** `car_inventory.db` lives on the instance disk. Redeploy or cold start can reset inventory/reservations unless you attach persistent disk or migrate to Postgres.
+- **SQLite on Render:** database file is `data/car_inventory.db`, mounted on a **1GB persistent disk** via `render.yaml` (`/app/data`). Survives redeploys on the same service; not a substitute for managed Postgres at scale.
 - **API_KEY required in production:** Reviewers need the key (or use Streamlit UI only).
 - **RAG golden tests** use keyword mode in CI; production may use `gemini_embeddings` when `GOOGLE_API_KEY` is set.
 
-For production beyond demo: attach Render persistent disk or use managed Postgres; treat current SQLite as **demo state only**.
+For production beyond demo: Postgres + migrations (see [docs/DECISIONS.md](docs/DECISIONS.md)).
 
 ## Security & production boundaries
 
 | Control | Behavior |
 |---------|----------|
-| `API_KEY` | Required in production (Render + Streamlit). Empty locally/CI for tests. |
-| Rate limit | `CHAT_RATE_LIMIT` (default `30/minute`) on chat; `10/minute` on REST reserve. |
+| `API_KEY` | Required in production (Render + Streamlit). Empty locally/CI for unit tests. Shared secret for demo (not multi-tenant). |
+| Rate limit | Per `X-API-Key` when present, else per client IP; `CHAT_RATE_LIMIT` (default `30/minute`) on chat; `10/minute` on REST reserve. |
 | Idempotency | Reserve + purchase emails deduplicated via SQLite + stable Streamlit keys. |
 | CORS | Production: `https://ai-car-concierge.streamlit.app` (comma-separated list). |
 | Observability | `X-Request-ID` header + `request_id` in chat JSON; structured access + `chat_outcome` logs. |
@@ -100,15 +100,20 @@ For production beyond demo: attach Render persistent disk or use managed Postgre
 cp .env.example .env
 ```
 
-| Variable | Purpose |
-|----------|---------|
-| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Intent + embeddings (not reply synthesis) |
-| `RESEND_API_KEY` | Purchase and inquiry emails |
-| `API_KEY` | Optional API authentication |
-| `CHAT_RATE_LIMIT` | Chat endpoint rate limit |
-| `CORS_ORIGINS` | Allowed browser origins |
-| `BACKEND_URL` | Streamlit → API base URL |
-| `SHOW_DEBUG_META` | Streamlit intent/rag debug footer |
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Optional | Intent + embeddings (keyword/rules if unset) |
+| `RESEND_API_KEY` | Optional | Purchase and inquiry emails |
+| `RESEND_FROM_EMAIL` | If Resend | Sender address |
+| `RESEND_TO_EMAIL` | If Resend | Inbox for notifications |
+| `API_KEY` | Production | API auth (`X-API-Key`); empty locally/CI unit tests |
+| `CHAT_RATE_LIMIT` | Optional | Chat rate limit (default `30/minute`) |
+| `CORS_ORIGINS` | Production | Allowed browser origins |
+| `BACKEND_URL` | Streamlit | API base URL for UI |
+| `GEMINI_CHAT_MODEL` | Optional | Intent model (default `gemini-2.5-flash`) |
+| `GEMINI_EMBEDDING_MODEL` | Optional | Embeddings (default `gemini-embedding-001`) |
+| `SHOW_DEBUG_META` | Optional | Streamlit intent/rag debug footer |
+| `USE_QUALITY_LLM` | Optional | Use quality chat model for intent |
 
 Config loads from project-root `.env` via `bootstrap()` in `create_app()` / Streamlit startup (`backend/config.py`).
 
@@ -163,7 +168,7 @@ pytest tests/test_production_smoke.py -q
 | **Streamlit Cloud** | Chat UI → API with `BACKEND_URL` + `API_KEY` |
 | **GitHub** | Source + CI |
 
-API health check: `/ready`. For production beyond demo, use persistent disk or Postgres (see Known limitations).
+API health check: `/ready`. Render blueprint mounts `data/car_inventory.db` on persistent disk (see `render.yaml`).
 
 ### Streamlit Cloud
 
@@ -187,7 +192,26 @@ Suggested prompts:
 
 ## CI
 
-GitHub Actions (`.github/workflows/ci.yml`) runs `pytest` without live API keys — keyword RAG fallback and rule paths stay green. `pip-audit` fails the job on known vulnerable dependencies.
+GitHub Actions (`.github/workflows/ci.yml`):
+
+| Job | When | What |
+|-----|------|------|
+| `test` | Every push/PR | Full suite (no live keys) + production `/ready` + chat 401 |
+| `smoke-prod` | Push to `master`/`main` | Full production smoke **with** `PRODUCTION_API_KEY` secret |
+
+**Required repo secret (for `smoke-prod`):** `PRODUCTION_API_KEY` — same value as `API_KEY` on Render. Job **fails** if the secret is missing or wrong.
+
+`pip-audit` fails the job on known vulnerable dependencies. Manual re-run: **Actions → CI → Run workflow**.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|----------------|-----|
+| `/ready` 503 or timeout | Render cold start | Wait 60s, retry; open service URL once |
+| Chat 401 from Streamlit | `API_KEY` mismatch | Same key in Render API + Streamlit secrets |
+| Chat 429 | Rate limit | Wait or raise `CHAT_RATE_LIMIT` on Render |
+| Gemini errors / keyword RAG only | Missing or invalid `GOOGLE_API_KEY` | Set key on Render, redeploy |
+| Stock reset after redeploy | Disk not attached | Sync blueprint `render.yaml` disk on API service |
 
 ## AI transparency
 

@@ -2,6 +2,15 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 
+def test_rate_limit_key_uses_api_key_when_present():
+    from starlette.requests import Request
+    from backend.main import rate_limit_key
+
+    scope = {"type": "http", "headers": [(b"x-api-key", b"secret-abc")]}
+    request = Request(scope)
+    assert rate_limit_key(request) == "key:secret-abc"
+
+
 def test_rate_limit_exceeded_handler_registered():
     from backend.main import app
 

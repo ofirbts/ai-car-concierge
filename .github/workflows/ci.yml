@@ -39,3 +39,4 @@ jobs:
       - run: pytest tests/test_production_smoke.py -q
         env:
           API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
+          REQUIRE_PRODUCTION_API_KEY: "true"

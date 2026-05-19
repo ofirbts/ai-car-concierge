@@ -36,7 +36,14 @@ from backend.security import require_api_key
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-limiter = Limiter(key_func=get_remote_address)
+def rate_limit_key(request: Request) -> str:
+    api_key = (request.headers.get("X-API-Key") or "").strip()
+    if api_key:
+        return f"key:{api_key}"
+    return get_remote_address(request)
+
+
+limiter = Limiter(key_func=rate_limit_key)
 
 
 def get_rag_service() -> PolicyRAGService:

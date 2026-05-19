@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SQL_PATH = PROJECT_ROOT / "data" / "inventory.sql"
-DEFAULT_DB_PATH = PROJECT_ROOT / "car_inventory.db"
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "car_inventory.db"
 SALES_MIN_YEAR = 2022
 POLICY_BLOCK_MESSAGE = (
     "This vehicle is Pending De-listing (model year before 2022) and cannot be "
@@ -126,7 +126,12 @@ def _inventory_sql_hash() -> str:
     return hashlib.sha256(SQL_PATH.read_bytes()).hexdigest()
 
 
+def _ensure_db_parent() -> None:
+    _db_path.parent.mkdir(parents=True, exist_ok=True)
+
+
 def get_connection() -> sqlite3.Connection:
+    _ensure_db_parent()
     conn = sqlite3.connect(_db_path, timeout=10.0, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -135,6 +140,7 @@ def get_connection() -> sqlite3.Connection:
 
 
 def init_db(force: bool = False) -> None:
+    _ensure_db_parent()
     if not SQL_PATH.is_file():
         raise FileNotFoundError(f"Inventory SQL not found: {SQL_PATH}")
     current_hash = _inventory_sql_hash()
