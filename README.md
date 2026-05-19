@@ -6,9 +6,10 @@ Premium dealership chatbot: hybrid RAG (SQLite inventory + Gemini policy embeddi
 
 | Service | URL |
 |---------|-----|
-| Streamlit UI | _Set after Streamlit Cloud deploy_ |
-| FastAPI docs | _Set after Render deploy_ `/docs` |
-| GitHub | _Add public repo URL_ |
+| **API (Render)** | https://ai-car-concierge-a073.onrender.com |
+| **API docs** | https://ai-car-concierge-a073.onrender.com/docs |
+| **Streamlit UI** | _Set after Streamlit Cloud deploy_ |
+| **GitHub** | https://github.com/ofirbts/ai-car-concierge |
 
 ## Assignment checklist
 
@@ -22,7 +23,7 @@ Premium dealership chatbot: hybrid RAG (SQLite inventory + Gemini policy embeddi
 | Reserve → `stock_count--` with idempotency | Done |
 | FastAPI + Streamlit | Done |
 | Tests + CI | `pytest -q` · GitHub Actions |
-| Public URL | Deploy via `Dockerfile` / `render.yaml` |
+| Public URL | https://ai-car-concierge-a073.onrender.com |
 
 ## Architecture
 
