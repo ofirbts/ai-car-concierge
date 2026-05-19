@@ -10,3 +10,6 @@ data/car_inventory.db.sqlhash
 *.db.sqlhash
 .DS_Store
 .streamlit/secrets.toml
+.gitignore
+SUBMISSION_EMAIL.txt
+    
