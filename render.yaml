@@ -20,7 +20,7 @@ services:
       - key: CHAT_RATE_LIMIT
         value: 30/minute
       - key: CORS_ORIGINS
-        value: "*"
+        value: https://ai-car-concierge.streamlit.app
 
   - type: web
     name: ai-car-concierge-ui

@@ -22,8 +22,9 @@ Premium dealership chatbot: hybrid RAG (SQLite inventory + Gemini policy embeddi
 | Purchase email (Resend), including inquiry without vehicle | Done |
 | Reserve → `stock_count--` with idempotency | Done |
 | FastAPI + Streamlit | Done |
-| Tests + CI | `pytest -q` · GitHub Actions |
-| Public URL | API + UI live (see Live links) |
+| Tests + CI | 103 tests · GitHub Actions · RAG golden eval |
+| Public URL | API + Streamlit UI live |
+| Observability + audit | Request ID, action_audit, purchase idempotency |
 
 ## Architecture
 
@@ -47,7 +48,7 @@ This project uses a **deterministic orchestrator** rather than a multi-agent fra
 1. **Intent agent (structured)** — Gemini extracts `ExtractedIntent` (Pydantic). Keyword rules handle high-confidence paths (reserve, purchase, legacy-year conflict).
 2. **Retrieval agent (tools)** — SQLite for inventory; `PolicyRAGService` for policy chunks. No Text-to-SQL.
 3. **Action agent (validated)** — Reserve and email only run after structured validation and policy checks (`assert_sellable`, email present).
-4. **Response agent (selective LLM)** — Inventory, hybrid, and policy replies are **deterministic** from DB/RAG text. General chat may use Gemini to polish from provided context only.
+4. **Response layer (deterministic)** — Inventory, hybrid, policy, and general chat replies are **deterministic** (no LLM paraphrase on facts). Gemini is used for intent classification and policy embeddings only.
 
 This keeps actions safe and auditable while still using LLMs where they add value (intent + embeddings + general phrasing).
 
@@ -63,10 +64,12 @@ This keeps actions safe and auditable while still using LLMs where they add valu
 
 | Control | Behavior |
 |---------|----------|
-| `API_KEY` | Optional. When set, mutating/list endpoints require `X-API-Key`. |
-| Rate limit | `CHAT_RATE_LIMIT` (default `30/minute`) on `POST /api/chat` via slowapi. |
-| Idempotency | `Idempotency-Key` header on REST reserve; chat sends a stable per-session key only for reserve messages (same vehicle → replay without double-decrement). Conflicts return 409. |
-| CORS | `CORS_ORIGINS` comma-separated list (default `*`). |
+| `API_KEY` | Required in production (Render + Streamlit). Empty locally/CI for tests. |
+| Rate limit | `CHAT_RATE_LIMIT` (default `30/minute`) on chat; `10/minute` on REST reserve. |
+| Idempotency | Reserve + purchase emails deduplicated via SQLite + stable Streamlit keys. |
+| CORS | Production: `https://ai-car-concierge.streamlit.app` (comma-separated list). |
+| Observability | `X-Request-ID` on every response; structured access + `chat_outcome` logs. |
+| Audit | `action_audit` table for reserve and purchase outcomes. |
 | Errors | No raw tracebacks to clients; structured JSON errors. |
 
 ## Environment
@@ -131,7 +134,7 @@ pytest tests/test_production_smoke.py -q
 | Platform | Responsibility | URL |
 |----------|----------------|-----|
 | **Render Web Service (API)** | FastAPI, SQLite, Gemini, Resend, policy enforcement | https://ai-car-concierge-a073.onrender.com |
-| **Render Web Service (UI)** or **Streamlit Cloud** | Chat UI only — calls API with `BACKEND_URL` + `API_KEY` | UI URL after deploy |
+| **Render Web Service (UI)** or **Streamlit Cloud** | Chat UI only — calls API with `BACKEND_URL` + `API_KEY` | https://ai-car-concierge.streamlit.app |
 | **GitHub** | Source code + CI (`pytest`) | https://github.com/ofirbts/ai-car-concierge |
 
 **Blueprint** on Render = file `render.yaml` that defines services automatically when you sync the repo. You can also create each Web Service manually (same result).
@@ -163,6 +166,28 @@ pytest tests/test_production_smoke.py -q
    API_KEY = "your-api-key"
    ```
 
+## Submission demo (copy into assessment)
+
+Live app: https://ai-car-concierge.streamlit.app  
+API: https://ai-car-concierge-a073.onrender.com/docs  
+Repo: https://github.com/ofirbts/ai-car-concierge
+
+Suggested prompts (proves policy + inventory + actions):
+
+1. `Tesla under $70000` — inventory + pre-2022 note  
+2. `Do you have a 2020 BMW?` — legacy conflict + 2022+ alternatives  
+3. `Model 3 price and refund policy` — hybrid RAG (Tesla + policy chunks)  
+4. `reserve vehicle #16` — stock decrement + idempotency  
+5. `buy vehicle #48 with you@email.com` — Resend purchase email  
+
+Verify API auth (optional, for reviewers with key):
+
+```bash
+curl -s https://ai-car-concierge-a073.onrender.com/ready
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://ai-car-concierge-a073.onrender.com/api/chat \
+  -H "Content-Type: application/json" -d '{"message":"Tesla"}'
+```
+
 ## 24-hour build narrative
 
 **Hours 0–4 — Foundation:** SQLite schema, policy markdown corpus, FastAPI skeleton, parameterized search, 2022+ enforcement tests.
@@ -183,4 +208,4 @@ GitHub Actions (`.github/workflows/ci.yml`) runs `pytest` without live API keys 
 
 ## AI transparency
 
-Built with Cursor. Google Gemini (`google-genai`) for intent, embeddings, and general-chat phrasing. No Text-to-SQL. Inventory numbers always come from SQLite.
+Built with Cursor. Google Gemini (`google-genai`) for **intent extraction and embeddings only** — not for inventory prices or policy text. No Text-to-SQL. Inventory numbers always come from SQLite.
