@@ -38,6 +38,15 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
+      - name: Verify PRODUCTION_API_KEY secret is set
+        run: |
+          if [ -z "$API_KEY" ]; then
+            echo "::error::GitHub secret PRODUCTION_API_KEY is empty. Set it under Settings → Secrets → Actions."
+            exit 1
+          fi
+          echo "PRODUCTION_API_KEY is set (length ${#API_KEY})"
+        env:
+          API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
       - run: pytest tests/test_production_smoke.py -v --tb=short
         env:
           API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
