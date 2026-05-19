@@ -1,19 +1,19 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+ENV_FILE = PROJECT_ROOT / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(extra="ignore")
 
     google_api_key: str = Field(
         default="",
-        validation_alias=AliasChoices(
-            "GOOGLE_API_KEY",
-            "GEMINI_API_KEY",
-            "OPENAI_API_KEY",
-        ),
+        validation_alias=AliasChoices("GOOGLE_API_KEY", "GEMINI_API_KEY"),
     )
     gemini_chat_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_CHAT_MODEL")
     gemini_chat_model_quality: str = Field(
@@ -45,7 +45,8 @@ def reset_settings_cache() -> None:
 def bootstrap() -> Settings:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    if ENV_FILE.is_file():
+        load_dotenv(ENV_FILE, override=True)
     reset_settings_cache()
     from backend.gemini_service import reset_gemini_client
     from backend.rag_service import reset_policy_rag_service

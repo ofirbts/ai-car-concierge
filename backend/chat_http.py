@@ -9,4 +9,4 @@ def chat_http_status(response: ChatResponse) -> int:
         return 200
     if response.intent in (IntentKind.RESERVE_INTENT, IntentKind.PURCHASE_INTENT):
         return 409
-    return 409
+    return 200

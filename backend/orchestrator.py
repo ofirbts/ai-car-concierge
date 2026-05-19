@@ -69,7 +69,15 @@ def _policy_context(message: str, rag: PolicyRAGService) -> tuple[str, bool, str
     return context, bool(context), result.retrieval_mode
 
 
-def _finalize_reply(user_message: str, fallback: str, context: str) -> str:
+def _finalize_reply(
+    user_message: str,
+    fallback: str,
+    context: str,
+    *,
+    allow_synthesis: bool = True,
+) -> str:
+    if not allow_synthesis:
+        return fallback
     synthesized = synthesize_reply(user_message, context)
     return synthesized if synthesized else fallback
 
@@ -114,7 +122,7 @@ def _handle_inventory(
             "and cannot be sold or reserved per our 2022+ Sales Policy."
         )
     context = f"Inventory results:\n{inventory_block}"
-    reply = _finalize_reply(message, fallback, context)
+    reply = _finalize_reply(message, fallback, context, allow_synthesis=False)
     return ChatResponse(reply=reply, intent=intent, vehicles=vehicles, rag_mode="sqlite")
 
 
@@ -145,7 +153,7 @@ def _handle_legacy_year_conflict(
         f"{policy_ctx}\n\nPre-2022 inventory:\n{legacy_block}\n\n"
         f"Sellable alternatives:\n{alt_block}"
     )
-    reply = _finalize_reply(message, fallback, context)
+    reply = _finalize_reply(message, fallback, context, allow_synthesis=False)
     return ChatResponse(
         reply=reply,
         intent=IntentKind.LEGACY_YEAR_CONFLICT,
@@ -162,6 +170,11 @@ def _handle_hybrid(
     extracted: ExtractedIntent,
     rag: PolicyRAGService,
 ) -> ChatResponse:
+    from backend.intent import is_legacy_year_focus
+
+    if is_legacy_year_focus(extracted, message):
+        return _handle_legacy_year_conflict(message, extracted, rag)
+
     vehicles = _search_inventory(extracted)
     policy_ctx, policy_used, rag_mode = _policy_context(message, rag)
     inventory_block = _format_vehicle_list(vehicles)
@@ -173,7 +186,7 @@ def _handle_hybrid(
         f"Structured inventory query results:\n{inventory_block}\n\n"
         f"Relevant policy excerpts:\n{policy_ctx or 'none'}"
     )
-    reply = _finalize_reply(message, fallback, context)
+    reply = _finalize_reply(message, fallback, context, allow_synthesis=False)
     return ChatResponse(
         reply=reply,
         intent=IntentKind.HYBRID_RAG,
@@ -346,9 +359,3 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
     )
     reply = _finalize_reply(message, fallback, "General concierge capabilities.")
     return ChatResponse(reply=reply, intent=IntentKind.GENERAL_CHAT)
-
-
-def classify_intent_rule_based(message: str, user_email: str | None = None) -> ExtractedIntent:
-    from backend.intent import classify_intent_rule_based as _rules
-
-    return _rules(message, user_email)

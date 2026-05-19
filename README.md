@@ -1,60 +1,69 @@
 # AI Car Concierge
 
-Premium dealership chatbot: **hybrid RAG** (SQLite + Google Gemini embeddings), **Gemini** intent/replies, **Resend** emails, **2022+ policy** enforcement.
+Premium dealership chatbot: hybrid RAG (SQLite + Gemini embeddings), Gemini intent/replies, Resend emails, 2022+ policy enforcement.
 
-## Stack
+## Assignment checklist
 
-- FastAPI + Pydantic v2
-- Streamlit UI
-- SQLite inventory (parameterized queries, no Text-to-SQL)
-- **Google Gemini** — chat, structured intent, policy embeddings
-- Resend — purchase emails
+| Requirement | Status |
+|-------------|--------|
+| SQLite inventory + safe queries | Done |
+| Policy RAG (Gemini embeddings + keyword fallback) | Done |
+| Hybrid inventory + policy in one question | Done |
+| Pre-2022 visible, not sold/reserved (`legacy_year_conflict`) | Done |
+| Purchase email (Resend) | Done (`RESEND_API_KEY`) |
+| Reserve → `stock_count--` | Done |
+| FastAPI + Streamlit | Done |
+| Tests + CI | `pytest -q` · GitHub Actions |
+| Public URL | Deploy via `Dockerfile` / `render.yaml` |
+
+## Business rules (deterministic)
+
+- `year < 2022` → `pending_delisting`; block reserve/purchase (HTTP 409 on actions).
+- Questions mentioning a pre-2022 year (e.g. “2020 Tesla”) → `legacy_year_conflict`, even with policy words (“refund”, “price”).
+- Inventory and hybrid replies use **structured DB/RAG text only** (no LLM paraphrase on prices/stock).
+- Policy and general chat may use Gemini to polish wording from retrieved policy context only.
 
 ## Environment
 
-Single API key via any of these names (first match in `.env`):
+```bash
+cp .env.example .env
+```
 
-- `GOOGLE_API_KEY`
-- `GEMINI_API_KEY`
-- `OPENAI_API_KEY` (legacy name — use your `AIza...` Google key here)
+| Variable | Purpose |
+|----------|---------|
+| `GOOGLE_API_KEY` or `GEMINI_API_KEY` | Gemini (`AIza...`) |
+| `RESEND_API_KEY` | Purchase emails |
+| `SHOW_DEBUG_META` | Streamlit debug footer |
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `GEMINI_CHAT_MODEL` | `gemini-2.5-flash` | Intent + replies |
-| `GEMINI_CHAT_MODEL_QUALITY` | `gemini-2.5-pro` | When `USE_QUALITY_LLM=true` |
-| `GEMINI_EMBEDDING_MODEL` | `gemini-embedding-001` | Policy RAG vectors |
-| `RESEND_*` | — | Purchase email automation |
+Config loads from project-root `.env` via `bootstrap()` (see `backend/config.py`).
 
-## Run
+## Run locally
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-# Put AIza... key in GOOGLE_API_KEY or OPENAI_API_KEY
-
 uvicorn backend.main:app --reload
 streamlit run frontend/app.py
 pytest -q
 ```
 
-- `/ready` → `"rag_mode": "gemini_embeddings"` when key is set
-- Chat: `buy vehicle #48 with you@email.com`
+## HTTP (`POST /api/chat`)
 
-## Architecture
+| Status | When |
+|--------|------|
+| 200 | Normal reply; legacy-year informational (`blocked: true` in body) |
+| 409 | Reserve/purchase action blocked; `reply` explains why |
 
-```
-POST /api/chat → PolicyRAGService (Gemini embeddings | keyword fallback)
-              → classify_intent (Gemini JSON | rules fallback)
-              → SQLite / Resend
-              → synthesize_reply (Gemini | template fallback)
-```
+## Deploy
+
+- API: Render/Railway with `Dockerfile` + `render.yaml` (set secrets in dashboard).
+- UI: Streamlit Cloud → `frontend/app.py`, `BACKEND_URL=https://your-api...`
+- Docker: `.dockerignore` excludes `.env` and local DB files.
+
+## CI
+
+GitHub Actions: `.github/workflows/ci.yml` runs `pytest` without API keys (rules + keyword paths).
 
 ## AI transparency
 
-Built with Cursor. **Google Gemini** for LLM + embeddings; **no OpenAI SDK**. Rules-based fallbacks if API fails or quota exceeded.
-
-## Deliverables still on you
-
-- Git push
-- Public deploy URL (see `Dockerfile`, `render.yaml`)
+Built with Cursor. Google Gemini (`google-genai`) for intent, embeddings, and policy/general phrasing. No Text-to-SQL.

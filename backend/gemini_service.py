@@ -54,7 +54,7 @@ def generate_text(system_instruction: str, user_message: str) -> str | None:
         text = response.text
         return text.strip() if text else None
     except Exception as exc:
-        logger.warning("Gemini generate_text failed: %s", exc)
+        logger.warning("Gemini generate_text failed (%s): %s", type(exc).__name__, exc)
         return None
 
 
@@ -82,7 +82,7 @@ def generate_structured(
             return None
         return schema.model_validate_json(text)
     except Exception as exc:
-        logger.warning("Gemini structured output failed: %s", exc)
+        logger.warning("Gemini structured output failed (%s): %s", type(exc).__name__, exc)
         return None
 
 
@@ -98,7 +98,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
         )
         return [list(item.values) for item in response.embeddings]
     except Exception as exc:
-        logger.warning("Gemini embed_texts failed: %s", exc)
+        logger.warning("Gemini embed_texts failed (%s): %s", type(exc).__name__, exc)
         return []
 
 

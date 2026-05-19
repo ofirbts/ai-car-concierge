@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
 VEHICLE_ID_RE = re.compile(r"(?:vehicle\s*)?(?:#|id\s*)(\d+)", re.IGNORECASE)
-LEGACY_YEAR_RE = re.compile(r"\b(2019|2020|2021)\b")
+YEAR_IN_MESSAGE_RE = re.compile(r"\b(20\d{2})\b")
 
 POLICY_KEYWORDS = (
     "refund",
@@ -106,27 +106,18 @@ def extract_price_max(message: str) -> float | None:
     return None
 
 
+def _inventory_makes() -> list[str]:
+    from backend.database import list_distinct_makes
+
+    return list_distinct_makes()
+
+
 def extract_make_model(message: str) -> tuple[str | None, str | None]:
-    makes = [
-        "Tesla",
-        "BMW",
-        "Audi",
-        "Mercedes-Benz",
-        "Mercedes",
-        "Porsche",
-        "Lexus",
-        "Volvo",
-        "Genesis",
-        "Jaguar",
-        "Land Rover",
-        "Cadillac",
-        "Lincoln",
-    ]
     lower = message.lower()
     found_make: str | None = None
-    for make in makes:
+    for make in _inventory_makes():
         if make.lower() in lower:
-            found_make = "Mercedes-Benz" if make == "Mercedes" else make
+            found_make = make
             break
     model = None
     if found_make:
@@ -156,12 +147,28 @@ def has_inventory_signal(
     )
 
 
+def message_mentions_pre_2022_year(message: str) -> bool:
+    for match in YEAR_IN_MESSAGE_RE.finditer(message):
+        if int(match.group(1)) < SALES_MIN_YEAR:
+            return True
+    return False
+
+
 def is_legacy_year_focus(extracted: ExtractedIntent, message: str) -> bool:
     if extracted.year is not None and extracted.year < SALES_MIN_YEAR:
         return True
     if extracted.year_min is not None and extracted.year_min < SALES_MIN_YEAR:
         return True
-    return LEGACY_YEAR_RE.search(message) is not None
+    return message_mentions_pre_2022_year(message)
+
+
+def apply_legacy_year_override(extracted: ExtractedIntent, message: str) -> ExtractedIntent:
+    if extracted.intent in (
+        IntentKind.INVENTORY_SEARCH,
+        IntentKind.HYBRID_RAG,
+    ) and is_legacy_year_focus(extracted, message):
+        extracted.intent = IntentKind.LEGACY_YEAR_CONFLICT
+    return extracted
 
 
 def classify_intent_rule_based(message: str, user_email: str | None = None) -> ExtractedIntent:
@@ -194,13 +201,16 @@ def classify_intent_rule_based(message: str, user_email: str | None = None) -> E
     has_policy = has_policy_signal(message)
     has_inventory = has_inventory_signal(message, make, year, price_max)
     if has_policy and has_inventory:
-        return ExtractedIntent(
-            intent=IntentKind.HYBRID_RAG,
-            make=make,
-            model=model,
-            year=year,
-            year_min=year,
-            price_max=price_max,
+        return apply_legacy_year_override(
+            ExtractedIntent(
+                intent=IntentKind.HYBRID_RAG,
+                make=make,
+                model=model,
+                year=year,
+                year_min=year,
+                price_max=price_max,
+            ),
+            message,
         )
     if has_policy:
         return ExtractedIntent(intent=IntentKind.POLICY_QUESTION)
@@ -213,9 +223,7 @@ def classify_intent_rule_based(message: str, user_email: str | None = None) -> E
             year_min=year,
             price_max=price_max,
         )
-        if is_legacy_year_focus(base, message):
-            base.intent = IntentKind.LEGACY_YEAR_CONFLICT
-        return base
+        return apply_legacy_year_override(base, message)
     return ExtractedIntent(intent=IntentKind.GENERAL_CHAT)
 
 
@@ -227,11 +235,7 @@ def classify_intent(message: str, user_email: str | None = None) -> ExtractedInt
     if parsed is not None:
         if user_email and not parsed.user_email:
             parsed.user_email = user_email
-        if parsed.intent == IntentKind.INVENTORY_SEARCH and is_legacy_year_focus(
-            parsed, message
-        ):
-            parsed.intent = IntentKind.LEGACY_YEAR_CONFLICT
-        return parsed
+        return apply_legacy_year_override(parsed, message)
 
     logger.warning("Gemini intent classification unavailable, using rules")
     return classify_intent_rule_based(message, user_email)

@@ -231,6 +231,17 @@ def reserve_vehicle(vehicle_id: int) -> Vehicle:
     return updated
 
 
+def list_distinct_makes() -> list[str]:
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            "SELECT DISTINCT make FROM vehicles ORDER BY LENGTH(make) DESC, make ASC"
+        ).fetchall()
+    finally:
+        conn.close()
+    return [str(row["make"]) for row in rows]
+
+
 def count_vehicles() -> int:
     conn = get_connection()
     try:

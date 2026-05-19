@@ -5,7 +5,9 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /ready
     envVars:
-      - key: OPENAI_API_KEY
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
         sync: false
       - key: RESEND_API_KEY
         sync: false

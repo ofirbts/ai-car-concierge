@@ -163,10 +163,15 @@ def reserve(vehicle_id: int):
 
 @app.post(
     "/api/chat",
-    response_model=ChatResponse,
     responses={
-        200: {"description": "Success"},
-        409: {"description": "Policy or stock block on reserve/purchase"},
+        200: {
+            "model": ChatResponse,
+            "description": "Success, or legacy-year informational reply (check blocked in body)",
+        },
+        409: {
+            "model": ChatResponse,
+            "description": "Reserve or purchase blocked (policy or out of stock); reply explains why",
+        },
     },
 )
 def chat(request: ChatRequest, rag: PolicyRAGService = Depends(get_rag_service)):

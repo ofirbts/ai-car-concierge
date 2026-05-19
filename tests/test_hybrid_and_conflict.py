@@ -3,11 +3,18 @@ from backend.orchestrator import ChatRequest, handle_chat
 from backend.rag_service import PolicyRAGService
 
 
-def test_classify_hybrid_intent():
+def test_classify_hybrid_intent_without_legacy_year():
     intent = classify_intent_rule_based(
-        "Tesla model 3 price and what is your refund policy?"
+        "BMW X5 price and what is your refund policy?"
     )
     assert intent.intent == IntentKind.HYBRID_RAG
+
+
+def test_classify_hybrid_with_2020_becomes_legacy_conflict():
+    intent = classify_intent_rule_based(
+        "2020 Tesla price and what is your refund policy?"
+    )
+    assert intent.intent == IntentKind.LEGACY_YEAR_CONFLICT
 
 
 def test_classify_legacy_year_intent():
@@ -24,6 +31,15 @@ def test_handle_legacy_year_conflict(isolated_db):
     assert response.blocked is True
     assert "2022" in response.reply or "De-listing" in response.reply
     assert "2021" in response.reply or response.vehicles
+
+
+def test_hybrid_legacy_year_uses_conflict_handler(isolated_db):
+    response = handle_chat(
+        ChatRequest(message="2020 Tesla price and refund policy"),
+        rag=PolicyRAGService(use_embeddings=False),
+    )
+    assert response.intent == IntentKind.LEGACY_YEAR_CONFLICT
+    assert response.blocked is True
 
 
 def test_hybrid_returns_inventory_and_policy(isolated_db):

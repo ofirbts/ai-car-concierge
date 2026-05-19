@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 REQUIRED_PATHS = [
     "requirements.txt",
+    ".env.example",
     ".cursorrules",
     "backend/main.py",
     "backend/database.py",

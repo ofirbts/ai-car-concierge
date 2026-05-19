@@ -1,9 +1,20 @@
-import os
-
 import httpx
 import streamlit as st
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+from backend.config import bootstrap, get_settings
+
+bootstrap()
+settings = get_settings()
+BACKEND_URL = settings.backend_url.rstrip("/")
+
+
+def _parse_chat_response(response: httpx.Response) -> tuple[str, dict]:
+    data: dict = {}
+    if response.headers.get("content-type", "").startswith("application/json"):
+        data = response.json()
+    reply = data.get("reply") or data.get("error", "No response.")
+    return reply, data
+
 
 st.set_page_config(page_title="AI Car Concierge", page_icon="🚗", layout="centered")
 st.title("AI Car Concierge")
@@ -43,35 +54,32 @@ if prompt := st.chat_input("Ask about cars, policies, reservations…"):
                     json=payload,
                     timeout=90.0,
                 )
-                response.raise_for_status()
-                data = response.json()
-                reply = data.get("reply", "No response.")
-                meta = []
-                show_debug = os.getenv("SHOW_DEBUG_META", "false").lower() in ("1", "true", "yes")
-                if show_debug:
-                    if data.get("intent"):
-                        meta.append(f"intent: `{data['intent']}`")
-                    if data.get("rag_mode"):
-                        meta.append(f"rag: `{data['rag_mode']}`")
-                    if data.get("email_sent"):
-                        meta.append("✉️ sales email sent")
-                    if data.get("reserved_vehicle"):
-                        v = data["reserved_vehicle"]
-                        meta.append(f"reserved #{v['id']}")
-                    if data.get("blocked"):
-                        meta.append("⛔ policy block")
-                    if meta:
-                        reply += "\n\n---\n" + " · ".join(meta)
+                if response.status_code in (200, 409):
+                    reply, data = _parse_chat_response(response)
+                    if settings.show_debug_meta:
+                        meta = []
+                        if data.get("intent"):
+                            meta.append(f"intent: `{data['intent']}`")
+                        if data.get("rag_mode"):
+                            meta.append(f"rag: `{data['rag_mode']}`")
+                        if data.get("email_sent"):
+                            meta.append("✉️ sales email sent")
+                        if data.get("reserved_vehicle"):
+                            v = data["reserved_vehicle"]
+                            meta.append(f"reserved #{v['id']}")
+                        if data.get("blocked"):
+                            meta.append("⛔ policy block")
+                        if meta:
+                            reply += "\n\n---\n" + " · ".join(meta)
+                elif response.is_success:
+                    reply, _ = _parse_chat_response(response)
+                else:
+                    reply, _ = _parse_chat_response(response)
             except httpx.ConnectError:
                 reply = (
                     f"Cannot reach backend at {BACKEND_URL}.\n\n"
                     "Start API: `uvicorn backend.main:app --reload`"
                 )
-            except httpx.HTTPStatusError as exc:
-                body = {}
-                if exc.response.headers.get("content-type", "").startswith("application/json"):
-                    body = exc.response.json()
-                reply = body.get("reply") or body.get("error", f"Backend error ({exc.response.status_code})")
             except Exception:
                 reply = "Unexpected error talking to the backend."
         st.markdown(reply)
