@@ -5,6 +5,7 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -27,7 +28,7 @@ jobs:
       - run: pytest -q tests/test_production_smoke.py::test_production_chat_requires_key
 
   smoke-prod:
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main') && secrets.PRODUCTION_API_KEY != ''
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +36,8 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: pytest tests/test_production_smoke.py -q
+      - name: Production smoke (requires PRODUCTION_API_KEY secret)
+        if: ${{ secrets.PRODUCTION_API_KEY != '' }}
+        run: pytest tests/test_production_smoke.py -q
         env:
           API_KEY: ${{ secrets.PRODUCTION_API_KEY }}
