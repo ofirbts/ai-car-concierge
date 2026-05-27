@@ -1,10 +1,12 @@
 import os
+from pathlib import Path
 
 if os.environ.get("REQUIRE_PRODUCTION_API_KEY") != "true":
     os.environ["API_KEY"] = ""
 os.environ.setdefault("GOOGLE_API_KEY", "")
 os.environ.setdefault("GEMINI_API_KEY", "")
 os.environ.setdefault("RESEND_API_KEY", "")
+os.environ.setdefault("CHAT_GOVERNOR_JOURNAL", "/tmp/ai_car_concierge_chat_governor_test.jsonl")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +34,16 @@ def _reset_rate_limiter():
     limiter.reset()
     yield
     limiter.reset()
+
+
+@pytest.fixture(autouse=True)
+def _clean_chat_governor_journal():
+    journal_path = Path(os.environ["CHAT_GOVERNOR_JOURNAL"])
+    if journal_path.exists():
+        journal_path.unlink()
+    yield
+    if journal_path.exists():
+        journal_path.unlink()
 
 
 @pytest.fixture

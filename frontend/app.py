@@ -65,6 +65,9 @@ if "reserve_idempotency_keys" not in st.session_state:
 if "purchase_idempotency_keys" not in st.session_state:
     st.session_state.purchase_idempotency_keys = {}
 
+if "session_id" not in st.session_state:
+    st.session_state.session_id = None
+
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         if message.get("blocked"):
@@ -78,6 +81,8 @@ if prompt := st.chat_input("Ask about cars, policies, reservations…"):
         st.markdown(prompt)
 
     payload: dict = {"message": prompt}
+    if st.session_state.session_id:
+        payload["session_id"] = st.session_state.session_id
     reserve_key = stable_reserve_idempotency_key(
         prompt,
         st.session_state.reserve_idempotency_keys,
@@ -106,8 +111,14 @@ if prompt := st.chat_input("Ask about cars, policies, reservations…"):
                 )
                 if response.status_code in (200, 409):
                     reply, data, is_blocked = _parse_chat_response(response)
+                    if data.get("session_id"):
+                        st.session_state.session_id = data["session_id"]
                     if settings.show_debug_meta:
                         meta = []
+                        if data.get("dialogue_phase"):
+                            meta.append(f"phase: `{data['dialogue_phase']}`")
+                        if data.get("conversation_progress"):
+                            meta.append(f"slots: `{data['conversation_progress']}`")
                         if data.get("intent"):
                             meta.append(f"intent: `{data['intent']}`")
                         if data.get("rag_mode"):

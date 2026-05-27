@@ -4,7 +4,38 @@
 
 [![CI](https://github.com/ofirbts/ai-car-concierge/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ofirbts/ai-car-concierge/actions/workflows/ci.yml)
 
-Premium dealership chatbot: hybrid RAG (SQLite inventory + Gemini policy embeddings), structured Gemini intent extraction, Resend purchase automations, and strict 2022+ sales policy enforcement.
+Premium dealership chatbot: **conversational sales agent** with hybrid inventory retrieval, session memory, grounded NLG, policy RAG, Resend purchase automations, and strict 2022+ sales policy enforcement.
+
+## Conversational purchase flow
+
+The bot guides buyers through discovery → recommendations → compare → reserve/purchase instead of only returning search results.
+
+```
+User: "I'm looking for a family car"
+  → session_id created, slots updated (passengers, use case)
+  → one clarifying question at a time (budget, space vs fuel, …)
+
+User: "four people, budget 75000, need space"
+  → hybrid retrieval (semantic + SQL filters on 2022+ in-stock inventory)
+  → grounded recommendations with "why it fits" (facts from DB only)
+
+User: "compare #17 vs #36" / "reserve #16" / "buy with me@email.com"
+  → compare, reserve, or purchase escalation within the same session
+```
+
+| Layer | Module | Role |
+|-------|--------|------|
+| Session state | `conversation_state.py` | SQLite-backed slots (budget, passengers, shortlist, …) |
+| Dialogue manager | `sales_dialogue.py` | Discovery questions, compare, reserve/purchase delegation |
+| Hybrid search | `inventory_retrieval.py` | Semantic + keyword + SQL on sellable inventory |
+| Grounded NLG | `conversational_nlg.py` | Natural sales phrasing; facts from DB/RAG only |
+| Orchestration | `orchestrator.py` | Sales layer over existing intent routing + governor |
+
+**API:** pass `session_id` from the first response on every follow-up turn (`POST /api/chat`). Streamlit stores it automatically.
+
+**Demo:** `python scripts/demo_conversations.py` — five full multi-turn purchase scenarios.
+
+Explicit commands still work without a session: `Show me Tesla`, `reserve vehicle #16`, policy questions, hybrid RAG.
 
 ## Live links
 
@@ -37,6 +68,10 @@ Streamlit UI
     │ POST /api/chat (+ X-API-Key, rate limit)
     ▼
 FastAPI orchestrator
+    ├─ sales_dialogue.py   Conversational purchase flow (session + slots)
+    ├─ inventory_retrieval.py  Hybrid semantic + SQL inventory search
+    ├─ conversational_nlg.py   Grounded sales phrasing (Gemini optional)
+    ├─ conversation_state.py SQLite session persistence
     ├─ intent.py          Gemini structured intent + keyword fallback
     ├─ intent_validate.py normalize make/model against DB
     ├─ database.py        parameterized SQLite (inventory, idempotency, audit)
@@ -52,17 +87,18 @@ FastAPI orchestrator
 | Intent classification | Yes (or rules if no key) | Pydantic `ExtractedIntent` |
 | Policy retrieval | Embeddings (or keyword) | `data/policies/*.md` chunks |
 | Inventory prices/stock | **No** | SQLite only |
-| User-visible reply text | **No** | Formatted DB + RAG excerpts |
+| User-visible reply text | Optional NLG | Grounded facts from DB/RAG only; template fallback without API key |
 | Reserve / email actions | **No** | Validated code paths only |
 
 ### Agent design (no LangGraph)
 
 1. **Intent (structured)** — Gemini extracts `ExtractedIntent` (Pydantic). Keyword rules handle reserve, purchase, legacy-year conflict.
-2. **Retrieval (tools)** — SQLite for inventory; `PolicyRAGService` for policy chunks. No Text-to-SQL.
-3. **Actions (validated)** — Reserve and email only after `assert_sellable` and email validation.
-4. **Responses (deterministic)** — Inventory, hybrid, policy, and general chat use templates and DB/RAG text only.
+2. **Sales dialogue** — Multi-turn session with slot filling, hybrid inventory retrieval, compare, and reserve/purchase escalation.
+3. **Retrieval (tools)** — SQLite for inventory; `PolicyRAGService` for policy chunks. No Text-to-SQL.
+4. **Actions (validated)** — Reserve and email only after `assert_sellable` and email validation.
+5. **Responses (grounded)** — Inventory facts from DB; optional Gemini NLG for conversational tone when `GOOGLE_API_KEY` is set.
 
-This keeps actions safe and auditable. Gemini is used only where structured extraction and semantic policy search add value—not for inventing prices or policy text.
+This keeps actions safe and auditable. Gemini is used for structured extraction, semantic search, and optional phrasing—not for inventing prices or policy text.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for tradeoffs. Build timeline: [docs/BUILD_LOG.md](docs/BUILD_LOG.md).
 

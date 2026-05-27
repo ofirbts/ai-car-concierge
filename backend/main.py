@@ -6,13 +6,15 @@ from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from backend.chat_http import chat_http_status
+from backend.codebase_packager import PackagerRequest, package_codebase
 from backend.config import bootstrap, get_settings
+from backend.job_broker import JobBroker, JobState
 from backend.database import (
     IdempotencyConflictError,
     OutOfStockError,
@@ -28,13 +30,23 @@ from backend.database import (
     search_vehicles,
 )
 from backend.middleware import RequestContextMiddleware
-from backend.orchestrator import ChatRequest, ChatResponse, handle_chat, log_chat_outcome
+from backend.output_validation import ValidationVerdict
+from backend.orchestrator import (
+    ChatRequest,
+    ChatResponse,
+    handle_chat,
+    log_chat_outcome,
+    record_chat_governor_result,
+)
 from backend.rag_service import PolicyRAGService, get_policy_rag_service, load_policy_chunks, search_policies
 from backend.request_context import get_request_id
+from backend.resilient_iteration_controller import ResilientIterationController
 from backend.security import require_api_key
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+job_broker = JobBroker()
+iteration_controller = ResilientIterationController("data/runtime_journal.jsonl")
 
 def rate_limit_key(request: Request) -> str:
     api_key = (request.headers.get("X-API-Key") or "").strip()
@@ -227,7 +239,12 @@ def create_app() -> FastAPI:
         _: None = Depends(require_api_key),
     ):
         response = handle_chat(body, rag=rag)
+        record_chat_governor_result(body, response)
         log_chat_outcome(response)
+        if response.validation_verdict == ValidationVerdict.REJECT:
+            content = response.model_dump(mode="json")
+            content["request_id"] = get_request_id()
+            return JSONResponse(status_code=422, content=content)
         status = chat_http_status(response)
         content = response.model_dump(mode="json")
         content["request_id"] = get_request_id()
@@ -240,6 +257,83 @@ def create_app() -> FastAPI:
         _: None = Depends(require_api_key),
     ):
         return search_policies(q, top_k=top_k)
+
+    @application.post("/skills/codebase-packager")
+    def skill_codebase_packager(
+        request: PackagerRequest,
+        _: None = Depends(require_api_key),
+    ):
+        return package_codebase(request)
+
+    class JobSubmitRequest(BaseModel):
+        kind: str
+        payload: dict
+
+    class JobSubmitResponse(BaseModel):
+        job_id: str
+        state: JobState
+
+    def _run_packager_job(payload: dict, context) -> dict:
+        packed = package_codebase(PackagerRequest.model_validate(payload))
+        if context.is_cancelled():
+            return {"cancelled": True}
+        return packed.model_dump(mode="json")
+
+    @application.post("/jobs/submit", response_model=JobSubmitResponse)
+    def submit_job(
+        body: JobSubmitRequest,
+        _: None = Depends(require_api_key),
+    ):
+        if body.kind != "codebase_packager":
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Unsupported job kind", "request_id": get_request_id()},
+            )
+        job_id = job_broker.submit(
+            handler=lambda context: _run_packager_job(body.payload, context),
+            metadata={"kind": body.kind},
+        )
+        return JobSubmitResponse(job_id=job_id, state=JobState.PENDING)
+
+    @application.get("/jobs/{job_id}")
+    def get_job(job_id: str, _: None = Depends(require_api_key)):
+        record = job_broker.get(job_id)
+        if record is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Job not found", "request_id": get_request_id()},
+            )
+        return record.model_dump(mode="json")
+
+    @application.post("/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str, _: None = Depends(require_api_key)):
+        cancelled = job_broker.cancel(job_id)
+        if not cancelled:
+            return JSONResponse(
+                status_code=409,
+                content={"error": "Job cannot be cancelled", "request_id": get_request_id()},
+            )
+        return {"job_id": job_id, "cancelled": True}
+
+    class IterationRunRequest(BaseModel):
+        run_id: str
+        initial_state: dict[str, object] = Field(default_factory=dict)
+        steps: list[str] = Field(default_factory=list)
+
+    @application.post("/governor/iteration/run")
+    def run_iteration(
+        body: IterationRunRequest,
+        _: None = Depends(require_api_key),
+    ):
+        handlers = []
+        for name in body.steps:
+            handlers.append((name, lambda state, step=name: {**state, "last_step": step}))
+        result = iteration_controller.run(
+            run_id=body.run_id,
+            initial_state=body.initial_state,
+            steps=handlers,
+        )
+        return result.model_dump(mode="json")
 
     return application
 

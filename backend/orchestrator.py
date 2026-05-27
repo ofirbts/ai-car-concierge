@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -25,7 +27,16 @@ from backend.intent import (
     classify_intent,
 )
 from backend.intent_validate import normalize_extracted_intent
+from backend.idempotency_utils import stable_idempotency_key
+from backend.output_validation import ResponseLike, ValidationReport, ValidationVerdict, validate_response_quality
 from backend.rag_service import PolicyRAGService, get_policy_rag_service
+from backend.conversation_state import (
+    DialoguePhase,
+    get_or_create_state,
+    save_conversation_state,
+)
+from backend.resilient_iteration_controller import ResilientIterationController
+from backend.sales_dialogue import SalesTurnResult, handle_sales_turn, should_use_sales_dialogue
 
 logger = logging.getLogger(__name__)
 
@@ -37,13 +48,24 @@ __all__ = [
     "ChatResponse",
     "handle_chat",
     "log_chat_outcome",
+    "record_chat_governor_result",
 ]
+
+_CHAT_GOVERNOR = ResilientIterationController(
+    Path(
+        os.environ.get(
+            "CHAT_GOVERNOR_JOURNAL",
+            str(Path(__file__).resolve().parents[1] / "data" / "chat_governor_journal.jsonl"),
+        )
+    )
+)
 
 
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     user_email: EmailStr | None = None
     idempotency_key: str | None = Field(default=None, max_length=128)
+    session_id: str | None = Field(default=None, max_length=64)
 
 
 class ChatResponse(BaseModel):
@@ -57,6 +79,25 @@ class ChatResponse(BaseModel):
     reserved_vehicle: Vehicle | None = None
     blocked: bool = False
     block_reason: str | None = None
+    validation_verdict: ValidationVerdict = ValidationVerdict.PASS
+    validation: ValidationReport | None = None
+    session_id: str | None = None
+    dialogue_phase: DialoguePhase | None = None
+    conversation_progress: dict[str, object] = Field(default_factory=dict)
+
+    def model_post_init(self, __context: object) -> None:
+        report = validate_response_quality(
+            ResponseLike(
+                reply=self.reply,
+                intent=self.intent,
+                policy_context_used=self.policy_context_used,
+                blocked=self.blocked,
+                reserved_vehicle=self.reserved_vehicle,
+                email_sent=self.email_sent,
+            )
+        )
+        self.validation = report
+        self.validation_verdict = report.verdict
 
 
 def _format_vehicle_list(vehicles: list[Vehicle]) -> str:
@@ -79,11 +120,67 @@ def _policy_context(message: str, rag: PolicyRAGService) -> tuple[str, bool, str
 
 def log_chat_outcome(response: ChatResponse) -> None:
     logger.info(
-        "chat_outcome intent=%s blocked=%s rag_mode=%s email_sent=%s",
+        "chat_outcome intent=%s blocked=%s rag_mode=%s email_sent=%s validation_verdict=%s",
         response.intent.value,
         response.blocked,
         response.rag_mode,
         response.email_sent,
+        response.validation_verdict.value,
+    )
+
+
+def _governor_run_id(request: ChatRequest) -> str:
+    if request.idempotency_key:
+        return f"chat:{request.idempotency_key}"
+    return stable_idempotency_key(
+        "chat_request",
+        {
+            "message": request.message,
+            "user_email": str(request.user_email or ""),
+        },
+    )
+
+
+def _load_or_classify(request: ChatRequest) -> tuple[str, ExtractedIntent]:
+    run_id = _governor_run_id(request)
+    state, completed = _CHAT_GOVERNOR.replay(run_id, {"message": request.message})
+    if "classify_intent" in completed and "extracted_intent" in state:
+        return run_id, ExtractedIntent.model_validate(state["extracted_intent"])
+
+    extracted = normalize_extracted_intent(classify_intent(request.message, request.user_email))
+    _CHAT_GOVERNOR.run(
+        run_id=run_id,
+        initial_state={"message": request.message},
+        steps=[
+            (
+                "classify_intent",
+                lambda _state: {"extracted_intent": extracted.model_dump(mode="json")},
+            )
+        ],
+    )
+    return run_id, extracted
+
+
+def record_chat_governor_result(request: ChatRequest, response: ChatResponse) -> None:
+    run_id = _governor_run_id(request)
+    _CHAT_GOVERNOR.run(
+        run_id=run_id,
+        initial_state={},
+        steps=[
+            (
+                "route_response",
+                lambda _state: {
+                    "intent": response.intent.value,
+                    "blocked": response.blocked,
+                },
+            ),
+            (
+                "validate_response",
+                lambda _state: {
+                    "validation_verdict": response.validation_verdict.value,
+                },
+            ),
+        ],
     )
 
 
@@ -249,12 +346,223 @@ def _handle_policy(message: str, rag: PolicyRAGService) -> ChatResponse:
     )
 
 
+def _sales_chat_response(
+    request: ChatRequest,
+    turn: SalesTurnResult,
+    *,
+    email_sent: bool = False,
+    email_error: str | None = None,
+    reserved_vehicle: Vehicle | None = None,
+    blocked: bool = False,
+    block_reason: str | None = None,
+) -> ChatResponse:
+    return ChatResponse(
+        reply=turn.reply,
+        intent=turn.intent,
+        vehicles=turn.vehicles,
+        rag_mode=turn.rag_mode,
+        email_sent=email_sent,
+        email_error=email_error,
+        reserved_vehicle=reserved_vehicle,
+        blocked=blocked,
+        block_reason=block_reason,
+        session_id=turn.state.session_id,
+        dialogue_phase=turn.phase,
+        conversation_progress=turn.state.filled_slots(),
+    )
+
+
+def _try_sales_dialogue(
+    request: ChatRequest,
+    extracted: ExtractedIntent,
+    service: PolicyRAGService,
+) -> ChatResponse | None:
+    state = get_or_create_state(request.session_id)
+    if not should_use_sales_dialogue(
+        extracted,
+        request.message,
+        state if request.session_id else None,
+        request.session_id,
+    ):
+        return None
+
+    turn = handle_sales_turn(
+        request.message,
+        extracted,
+        state,
+        str(request.user_email) if request.user_email else None,
+        service,
+    )
+
+    if turn.delegate == "reserve" and turn.vehicle_id is not None:
+        vehicle = get_vehicle_by_id(turn.vehicle_id)
+        if vehicle is None:
+            turn.reply = f"Vehicle #{turn.vehicle_id} was not found."
+            return _sales_chat_response(request, turn)
+        if vehicle.pending_delisting:
+            return _sales_chat_response(
+                request,
+                turn,
+                blocked=True,
+                block_reason=POLICY_BLOCK_MESSAGE,
+            )
+        try:
+            reserved = reserve_vehicle(turn.vehicle_id, idempotency_key=request.idempotency_key)
+        except OutOfStockError:
+            turn.reply = f"Vehicle #{turn.vehicle_id} is out of stock and cannot be reserved."
+            return _sales_chat_response(request, turn, blocked=True, block_reason="out_of_stock")
+        audit("reserve", "success", vehicle_id=reserved.id)
+        turn.state.phase = DialoguePhase.COMPLETED
+        save_conversation_state(turn.state)
+        turn.reply = (
+            f"Done — I've reserved the {reserved.year} {reserved.make} {reserved.model} "
+            f"(#{reserved.id}) for you. Remaining stock: {reserved.stock_count}."
+        )
+        return _sales_chat_response(request, turn, reserved_vehicle=reserved)
+
+    if turn.delegate == "purchase":
+        email = turn.state.contact_email or request.user_email
+        if not email:
+            return _sales_chat_response(request, turn)
+        purchase_extracted = ExtractedIntent(
+            intent=IntentKind.PURCHASE_INTENT,
+            vehicle_id=turn.vehicle_id,
+            user_email=email,
+            make=extracted.make,
+            model=extracted.model,
+            year=extracted.year,
+        )
+        purchase_request = ChatRequest(
+            message=request.message,
+            user_email=email,
+            idempotency_key=request.idempotency_key,
+            session_id=turn.state.session_id,
+        )
+        response = _handle_purchase_intent(purchase_request, purchase_extracted)
+        response.session_id = turn.state.session_id
+        response.dialogue_phase = DialoguePhase.COMPLETED
+        response.conversation_progress = turn.state.filled_slots()
+        if response.rag_mode is None:
+            response.rag_mode = turn.rag_mode
+        turn.state.phase = DialoguePhase.COMPLETED
+        save_conversation_state(turn.state)
+        return response
+
+    return _sales_chat_response(request, turn)
+
+
+def _handle_purchase_intent(request: ChatRequest, extracted: ExtractedIntent) -> ChatResponse:
+    email = extracted.user_email
+    if not email:
+        return ChatResponse(
+            reply="Please include your email so our sales team can follow up on your purchase.",
+            intent=extracted.intent,
+        )
+    vehicle: Vehicle | None = None
+    if extracted.vehicle_id is not None:
+        vehicle = get_vehicle_by_id(extracted.vehicle_id)
+        if vehicle is None:
+            return ChatResponse(
+                reply=f"Vehicle #{extracted.vehicle_id} was not found.",
+                intent=extracted.intent,
+            )
+    elif extracted.make:
+        matches = search_vehicles(
+            VehicleSearchFilters(
+                make=extracted.make,
+                model=extracted.model,
+                year=extracted.year,
+                in_stock_only=True,
+                limit=1,
+            )
+        )
+        sellable = [v for v in matches if not v.pending_delisting]
+        vehicle = sellable[0] if sellable else None
+
+    if vehicle and vehicle.pending_delisting:
+        alts = _sellable_alternatives(extracted, limit=3)
+        alt_text = _format_vehicle_list(alts) if alts else "Ask us to search 2022+ inventory."
+        return ChatResponse(
+            reply=(
+                f"We see a {vehicle.year} {vehicle.make} {vehicle.model} in records, but "
+                f"{POLICY_BLOCK_MESSAGE}\n\nEligible alternatives:\n{alt_text}"
+            ),
+            intent=extracted.intent,
+            vehicles=[vehicle] + alts,
+            blocked=True,
+            block_reason=POLICY_BLOCK_MESSAGE,
+        )
+    if vehicle:
+        try:
+            assert_sellable(vehicle)
+        except PolicyViolationError as exc:
+            audit("purchase_email", "blocked", vehicle_id=vehicle.id, detail=str(exc))
+            return ChatResponse(
+                reply=str(exc),
+                intent=extracted.intent,
+                vehicles=[vehicle],
+                blocked=True,
+                block_reason=str(exc),
+            )
+        if not _purchase_email_allowed(request, str(email), vehicle.id):
+            return _purchase_replay_response(extracted.intent)
+        email_result = send_purchase_email(str(email), vehicle)
+        if email_result.sent:
+            audit("purchase_email", "success", vehicle_id=vehicle.id, customer_email=str(email))
+            suffix = " Our sales team has been notified by email."
+        elif email_result.error == "resend_not_configured":
+            suffix = " Purchase interest recorded (Resend API key not configured)."
+        else:
+            suffix = f" Purchase interest recorded (email failed: {email_result.error})."
+        return ChatResponse(
+            reply=(
+                f"Thank you. We received your purchase interest for "
+                f"{vehicle.year} {vehicle.make} {vehicle.model} ({email}).{suffix}"
+            ),
+            intent=extracted.intent,
+            vehicles=[vehicle],
+            email_sent=email_result.sent,
+            email_error=email_result.error,
+        )
+    if not _purchase_email_allowed(request, str(email), None):
+        return _purchase_replay_response(extracted.intent)
+    email_result = send_purchase_inquiry_email(
+        str(email),
+        request.message,
+        make=extracted.make,
+        model=extracted.model,
+    )
+    if email_result.sent:
+        audit("purchase_email", "success", customer_email=str(email), detail="inquiry")
+        suffix = " Our sales team has been notified by email."
+    elif email_result.error == "resend_not_configured":
+        suffix = " Purchase interest recorded (Resend API key not configured)."
+    else:
+        suffix = f" Purchase interest recorded (email failed: {email_result.error})."
+    return ChatResponse(
+        reply=(
+            f"Thank you, {email}. A sales specialist will contact you within one business day.{suffix} "
+            "Specify a vehicle id or model for faster matching."
+        ),
+        intent=extracted.intent,
+        email_sent=email_result.sent,
+        email_error=email_result.error,
+    )
+
+
 def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> ChatResponse:
     service = rag if rag is not None else get_policy_rag_service()
-    extracted = normalize_extracted_intent(
-        classify_intent(request.message, request.user_email)
-    )
+    _, extracted = _load_or_classify(request)
     message = request.message
+
+    if extracted.intent not in (
+        IntentKind.HYBRID_RAG,
+        IntentKind.LEGACY_YEAR_CONFLICT,
+        IntentKind.POLICY_QUESTION,
+    ):
+        sales_response = _try_sales_dialogue(request, extracted, service)
+        if sales_response is not None:
+            return sales_response
 
     if extracted.intent == IntentKind.HYBRID_RAG:
         return _handle_hybrid(message, extracted, service)
@@ -323,102 +631,7 @@ def handle_chat(request: ChatRequest, rag: PolicyRAGService | None = None) -> Ch
         )
 
     if extracted.intent == IntentKind.PURCHASE_INTENT:
-        email = extracted.user_email
-        if not email:
-            return ChatResponse(
-                reply="Please include your email so our sales team can follow up on your purchase.",
-                intent=extracted.intent,
-            )
-        vehicle: Vehicle | None = None
-        if extracted.vehicle_id is not None:
-            vehicle = get_vehicle_by_id(extracted.vehicle_id)
-            if vehicle is None:
-                return ChatResponse(
-                    reply=f"Vehicle #{extracted.vehicle_id} was not found.",
-                    intent=extracted.intent,
-                )
-        elif extracted.make:
-            matches = search_vehicles(
-                VehicleSearchFilters(
-                    make=extracted.make,
-                    model=extracted.model,
-                    year=extracted.year,
-                    in_stock_only=True,
-                    limit=1,
-                )
-            )
-            sellable = [v for v in matches if not v.pending_delisting]
-            vehicle = sellable[0] if sellable else None
-
-        if vehicle and vehicle.pending_delisting:
-            alts = _sellable_alternatives(extracted, limit=3)
-            alt_text = _format_vehicle_list(alts) if alts else "Ask us to search 2022+ inventory."
-            return ChatResponse(
-                reply=(
-                    f"We see a {vehicle.year} {vehicle.make} {vehicle.model} in records, but "
-                    f"{POLICY_BLOCK_MESSAGE}\n\nEligible alternatives:\n{alt_text}"
-                ),
-                intent=extracted.intent,
-                vehicles=[vehicle] + alts,
-                blocked=True,
-                block_reason=POLICY_BLOCK_MESSAGE,
-            )
-        if vehicle:
-            try:
-                assert_sellable(vehicle)
-            except PolicyViolationError as exc:
-                audit("purchase_email", "blocked", vehicle_id=vehicle.id, detail=str(exc))
-                return ChatResponse(
-                    reply=str(exc),
-                    intent=extracted.intent,
-                    vehicles=[vehicle],
-                    blocked=True,
-                    block_reason=str(exc),
-                )
-            if not _purchase_email_allowed(request, str(email), vehicle.id):
-                return _purchase_replay_response(extracted.intent)
-            email_result = send_purchase_email(str(email), vehicle)
-            if email_result.sent:
-                audit("purchase_email", "success", vehicle_id=vehicle.id, customer_email=str(email))
-                suffix = " Our sales team has been notified by email."
-            elif email_result.error == "resend_not_configured":
-                suffix = " Purchase interest recorded (Resend API key not configured)."
-            else:
-                suffix = f" Purchase interest recorded (email failed: {email_result.error})."
-            return ChatResponse(
-                reply=(
-                    f"Thank you. We received your purchase interest for "
-                    f"{vehicle.year} {vehicle.make} {vehicle.model} ({email}).{suffix}"
-                ),
-                intent=extracted.intent,
-                vehicles=[vehicle],
-                email_sent=email_result.sent,
-                email_error=email_result.error,
-            )
-        if not _purchase_email_allowed(request, str(email), None):
-            return _purchase_replay_response(extracted.intent)
-        email_result = send_purchase_inquiry_email(
-            str(email),
-            message,
-            make=extracted.make,
-            model=extracted.model,
-        )
-        if email_result.sent:
-            audit("purchase_email", "success", customer_email=str(email), detail="inquiry")
-            suffix = " Our sales team has been notified by email."
-        elif email_result.error == "resend_not_configured":
-            suffix = " Purchase interest recorded (Resend API key not configured)."
-        else:
-            suffix = f" Purchase interest recorded (email failed: {email_result.error})."
-        return ChatResponse(
-            reply=(
-                f"Thank you, {email}. A sales specialist will contact you within one business day.{suffix} "
-                "Specify a vehicle id or model for faster matching."
-            ),
-            intent=extracted.intent,
-            email_sent=email_result.sent,
-            email_error=email_result.error,
-        )
+        return _handle_purchase_intent(request, extracted)
 
     fallback = (
         "I'm your AI Car Concierge. Ask about inventory (e.g. Tesla under $70000), "

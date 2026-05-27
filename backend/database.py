@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from enum import Enum
 from pathlib import Path
@@ -108,6 +109,20 @@ CREATE TABLE IF NOT EXISTS action_audit (
 );
 """
 
+JOB_BROKER_DDL = """
+CREATE TABLE IF NOT EXISTS job_broker_jobs (
+    job_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    started_at REAL,
+    finished_at REAL,
+    result_json TEXT,
+    error TEXT,
+    metadata_json TEXT NOT NULL,
+    cancel_requested INTEGER NOT NULL DEFAULT 0
+);
+"""
+
 
 def set_db_path(path: Path) -> None:
     global _db_path
@@ -166,9 +181,101 @@ def ensure_app_tables() -> None:
     conn = get_connection()
     try:
         conn.executescript(
-            RESERVATIONS_DDL + PURCHASE_NOTIFICATIONS_DDL + ACTION_AUDIT_DDL
+            RESERVATIONS_DDL
+            + PURCHASE_NOTIFICATIONS_DDL
+            + ACTION_AUDIT_DDL
+            + JOB_BROKER_DDL
+            + """
+CREATE TABLE IF NOT EXISTS conversation_sessions (
+    session_id TEXT PRIMARY KEY,
+    state_json TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def save_job_record(record: dict[str, Any]) -> None:
+    conn = get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO job_broker_jobs (
+                job_id, state, created_at, started_at, finished_at,
+                result_json, error, metadata_json, cancel_requested
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id) DO UPDATE SET
+                state=excluded.state,
+                created_at=excluded.created_at,
+                started_at=excluded.started_at,
+                finished_at=excluded.finished_at,
+                result_json=excluded.result_json,
+                error=excluded.error,
+                metadata_json=excluded.metadata_json,
+                cancel_requested=excluded.cancel_requested
+            """,
+            (
+                record["job_id"],
+                record["state"],
+                record["created_at"],
+                record.get("started_at"),
+                record.get("finished_at"),
+                json.dumps(record.get("result"), ensure_ascii=False) if record.get("result") is not None else None,
+                record.get("error"),
+                json.dumps(record.get("metadata", {}), ensure_ascii=False),
+                1 if record.get("cancel_requested") else 0,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_job_record(job_id: str) -> dict[str, Any] | None:
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT job_id, state, created_at, started_at, finished_at,
+                   result_json, error, metadata_json, cancel_requested
+            FROM job_broker_jobs
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return {
+        "job_id": str(row["job_id"]),
+        "state": str(row["state"]),
+        "created_at": float(row["created_at"]),
+        "started_at": float(row["started_at"]) if row["started_at"] is not None else None,
+        "finished_at": float(row["finished_at"]) if row["finished_at"] is not None else None,
+        "result": json.loads(row["result_json"]) if row["result_json"] else None,
+        "error": str(row["error"]) if row["error"] is not None else None,
+        "metadata": json.loads(row["metadata_json"]) if row["metadata_json"] else {},
+        "cancel_requested": bool(row["cancel_requested"]),
+    }
+
+
+def request_job_cancel(job_id: str) -> bool:
+    conn = get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE job_broker_jobs
+            SET cancel_requested = 1
+            WHERE job_id = ? AND state IN ('pending', 'running')
+            """,
+            (job_id,),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
     finally:
         conn.close()
 

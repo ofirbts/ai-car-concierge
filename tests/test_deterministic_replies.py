@@ -1,3 +1,6 @@
+from pydantic import EmailStr
+
+from backend.conversation_state import DialoguePhase
 from backend.orchestrator import ChatRequest, handle_chat
 from backend.rag_service import PolicyRAGService
 
@@ -28,10 +31,12 @@ def test_policy_reply_from_rag_chunks(isolated_db):
     assert "refund" in response.reply.lower()
 
 
-def test_general_chat_uses_template(isolated_db):
+def test_general_chat_starts_sales_conversation(isolated_db):
     response = handle_chat(
         ChatRequest(message="Hello, what can you help me with?"),
         rag=PolicyRAGService(use_embeddings=False),
     )
-    assert "concierge" in response.reply.lower()
+    assert response.session_id
+    assert response.dialogue_phase == DialoguePhase.DISCOVERY
+    assert "?" in response.reply
     assert response.intent.value == "general_chat"
