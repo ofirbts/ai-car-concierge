@@ -84,7 +84,7 @@ def test_production_api_version_and_conversational_sales(production_key):
     root = httpx.get(f"{PRODUCTION_URL}/", timeout=60.0)
     assert root.status_code == 200
     root_data = root.json()
-    assert root_data.get("version") == "1.1.0", root_data
+    assert root_data.get("version") in ("1.1.0", "1.2.0"), root_data
     assert root_data.get("features", {}).get("conversational_sales") is True
 
     response = httpx.post(

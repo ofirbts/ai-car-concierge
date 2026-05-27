@@ -28,6 +28,20 @@ SUV_MODELS = (
 )
 SEDAN_MODELS = ("a4", "model 3", "3 series", "c-class", "s60", "es", "g80")
 SPORTS_MODELS = ("911",)
+FAMILY_BOOST_MODELS = (
+    "navigator",
+    "xc90",
+    "escalade",
+    "x5",
+    "q7",
+    "gle",
+    "rx",
+    "gv70",
+    "range rover",
+    "model y",
+)
+FAMILY_PENALIZE_MODELS = ("911",)
+FAMILY_SOFT_PENALIZE_MODELS = ("cayenne",)
 
 SEMANTIC_PROFILES: dict[str, dict[str, object]] = {
     "family": {
@@ -214,6 +228,44 @@ def state_to_filters(state: ConversationState) -> VehicleSearchFilters:
     return filters
 
 
+def is_family_shopping(state: ConversationState | None) -> bool:
+    if state is None:
+        return False
+    if state.use_case and "family" in state.use_case.lower():
+        return True
+    if (state.passengers or 0) >= 4:
+        return True
+    if (state.family_size or 0) >= 4:
+        return True
+    return False
+
+
+def family_fit_score(vehicle: Vehicle, state: ConversationState | None) -> float:
+    if not is_family_shopping(state):
+        return 0.0
+    model_lower = vehicle.model.lower()
+    make_lower = vehicle.make.lower()
+    score = 0.0
+    if any(token in model_lower for token in FAMILY_PENALIZE_MODELS):
+        score -= 3.0
+    if any(token in model_lower for token in FAMILY_SOFT_PENALIZE_MODELS):
+        score -= 1.5
+    if any(token in model_lower for token in FAMILY_BOOST_MODELS):
+        score += 2.0
+    if infer_body_type(vehicle) == "suv" and make_lower in (
+        "lincoln",
+        "volvo",
+        "cadillac",
+        "lexus",
+        "land rover",
+    ):
+        score += 1.0
+    if state and state.space_priority == "space" and infer_body_type(vehicle) == "suv":
+        if "navigator" in model_lower or "escalade" in model_lower or "xc90" in model_lower:
+            score += 1.5
+    return score
+
+
 def body_type_filter(vehicles: list[Vehicle], body_type: str | None) -> list[Vehicle]:
     if not body_type:
         return vehicles
@@ -296,7 +348,8 @@ def hybrid_search_inventory(
             for vehicle, vec in zip(candidates, vectors):
                 semantic = _cosine_similarity(query_vec, vec)
                 profile_score = _profile_filter_score(vehicle, profiles) * 0.15
-                ranked.append((semantic + profile_score, vehicle))
+                family_score = family_fit_score(vehicle, state) * 0.12
+                ranked.append((semantic + profile_score + family_score, vehicle))
         else:
             use_embeddings = False
 
@@ -304,6 +357,7 @@ def hybrid_search_inventory(
         for vehicle in candidates:
             score = _keyword_score(query_text, vehicle)
             score += _profile_filter_score(vehicle, profiles) * 0.2
+            score += family_fit_score(vehicle, state)
             if state and state.budget and vehicle.price <= state.budget:
                 score += 1.0
             ranked.append((score, vehicle))

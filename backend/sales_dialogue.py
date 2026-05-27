@@ -22,6 +22,7 @@ from backend.intent import (
 )
 from backend.inventory_retrieval import (
     detect_semantic_profiles,
+    family_fit_score,
     hybrid_search_inventory,
     infer_body_type,
 )
@@ -296,6 +297,85 @@ def _resolve_compare_ids(state: ConversationState, message: str) -> list[int]:
     return []
 
 
+def _wants_new_search(message: str) -> bool:
+    lower = message.lower()
+    return bool(
+        re.search(
+            r"\b(show|find|search|other|different|another|more options|something else)\b",
+            lower,
+        )
+    )
+
+
+def _is_preference_refinement(message: str, state: ConversationState) -> bool:
+    if not state.last_recommended_ids:
+        return False
+    if _wants_new_search(message):
+        return False
+    if _matches_any(
+        message,
+        COMPARE_SIGNALS + RESERVE_SIGNALS + PURCHASE_SIGNALS,
+    ):
+        return False
+    return bool(
+        _matches_any(message, SPACE_SIGNALS + FUEL_SIGNALS)
+        or _parse_use_case(message)
+        or _parse_fuel(message)
+        or _parse_body_type(message)
+    )
+
+
+def _vehicles_from_ids(ids: list[int]) -> list[Vehicle]:
+    out: list[Vehicle] = []
+    for vid in ids:
+        vehicle = get_vehicle_by_id(vid)
+        if vehicle is not None:
+            out.append(vehicle)
+    return out
+
+
+def _handle_preference_refinement(
+    state: ConversationState,
+    message: str,
+) -> SalesTurnResult | None:
+    if not _is_preference_refinement(message, state):
+        return None
+    vehicles = _vehicles_from_ids(state.last_recommended_ids[:4])
+    if not vehicles:
+        return None
+    ranked = sorted(
+        vehicles,
+        key=lambda v: (family_fit_score(v, state), -v.price),
+        reverse=True,
+    )
+    best = ranked[0]
+    ids_hint = " vs ".join(f"#{v.id}" for v in ranked[:3])
+    if state.space_priority == "space":
+        reply = (
+            f"Understood — I'll prioritize space for your family trips. "
+            f"From your shortlist, the {best.year} {best.make} {best.model} (#{best.id}) "
+            f"is the strongest fit for room and comfort. "
+            f"Want a quick compare ({ids_hint}), or say reserve #{best.id}?"
+        )
+    else:
+        reply = (
+            f"Got it — I've noted that preference. "
+            f"Your top shortlist pick for family use is still the "
+            f"{best.year} {best.make} {best.model} (#{best.id}). "
+            f"Compare ({ids_hint}), pick another option, or reserve when ready."
+        )
+    state.phase = DialoguePhase.RECOMMENDING
+    save_conversation_state(state)
+    return SalesTurnResult(
+        reply=reply,
+        state=state,
+        vehicles=ranked,
+        intent=IntentKind.INVENTORY_SEARCH,
+        phase=state.phase,
+        rag_mode="sales_dialogue+preference_refine",
+    )
+
+
 def _pick_vehicle_for_action(state: ConversationState, message: str) -> Vehicle | None:
     vid = extract_vehicle_id(message)
     if vid is not None:
@@ -433,6 +513,10 @@ def handle_sales_turn(
             phase=state.phase,
             rag_mode="sales_dialogue",
         )
+
+    refinement = _handle_preference_refinement(state, message)
+    if refinement is not None:
+        return refinement
 
     question = _next_discovery_question(state)
     if question and not state.has_discovery_basics():

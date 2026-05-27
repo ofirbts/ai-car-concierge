@@ -418,6 +418,15 @@ def _try_sales_dialogue(
             f"Done — I've reserved the {reserved.year} {reserved.make} {reserved.model} "
             f"(#{reserved.id}) for you. Remaining stock: {reserved.stock_count}."
         )
+        if (
+            turn.state.last_recommended_ids
+            and reserved.id not in turn.state.last_recommended_ids
+        ):
+            top = turn.state.last_recommended_ids[0]
+            turn.reply += (
+                f" Note: #{reserved.id} wasn't in your latest recommendations "
+                f"(top pick was #{top}). Say compare or reserve #{top} if you want that one."
+            )
         return _sales_chat_response(request, turn, reserved_vehicle=reserved)
 
     if turn.delegate == "purchase":

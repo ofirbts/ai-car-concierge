@@ -22,8 +22,6 @@ from backend.rag_service import PolicyRAGService
 
 bootstrap()
 init_db()
-from backend.rag_service import PolicyRAGService
-
 rag = PolicyRAGService(use_embeddings=False)
 
 
@@ -58,7 +56,16 @@ SCENARIOS = [
             "budget around 75000",
             "family trips, space is more important than fuel",
             "what's the best value?",
-            "reserve vehicle #16",
+            "reserve vehicle #55",
+        ],
+    ),
+    (
+        "Scenario 6 — Hebrew family flow",
+        [
+            "אני מחפש רכב למשפחה",
+            "ארבעה אנשים, תקציב 75000",
+            "חשוב מרווח למשפחה",
+            "מה הכי משתלם?",
         ],
     ),
     (
