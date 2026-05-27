@@ -101,3 +101,42 @@ def test_production_api_version_and_conversational_sales(production_key):
     assert data.get("dialogue_phase") == "discovery", data
     assert "?" in data["reply"], data["reply"][:200]
     assert data.get("intent") == "general_chat"
+
+
+def test_production_reserve_decrements_stock(production_key):
+    vehicle_id = 16
+    headers = {"X-API-Key": production_key}
+    before_resp = httpx.get(
+        f"{PRODUCTION_URL}/vehicles/{vehicle_id}",
+        headers=headers,
+        timeout=60.0,
+    )
+    assert before_resp.status_code == 200, before_resp.text[:200]
+    before_stock = before_resp.json()["stock_count"]
+    if before_stock < 1:
+        pytest.skip(f"Vehicle #{vehicle_id} has no stock for reserve smoke test")
+
+    import uuid
+
+    reserve = httpx.post(
+        f"{PRODUCTION_URL}/api/chat",
+        json={
+            "message": f"reserve vehicle #{vehicle_id}",
+            "idempotency_key": f"smoke-reserve-{uuid.uuid4()}",
+        },
+        headers=headers,
+        timeout=90.0,
+    )
+    assert reserve.status_code == 200, reserve.text[:300]
+    reserve_data = reserve.json()
+    assert reserve_data.get("reserved_vehicle"), reserve_data
+    assert reserve_data["reserved_vehicle"]["id"] == vehicle_id
+
+    after_resp = httpx.get(
+        f"{PRODUCTION_URL}/vehicles/{vehicle_id}",
+        headers=headers,
+        timeout=60.0,
+    )
+    assert after_resp.status_code == 200
+    after_stock = after_resp.json()["stock_count"]
+    assert after_stock == before_stock - 1

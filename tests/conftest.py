@@ -30,10 +30,13 @@ def _reset_settings_each_test():
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limiter():
+    from limits.storage import MemoryStorage
     from backend.main import limiter
 
+    limiter._storage = MemoryStorage()
     limiter.reset()
     yield
+    limiter._storage = MemoryStorage()
     limiter.reset()
 
 
