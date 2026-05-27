@@ -7,11 +7,16 @@ __pycache__
 .pytest_cache
 .git
 .gitignore
+.repo_audit
 car_inventory.db
 car_inventory.db.sqlhash
 *.db.sqlhash
+data/runtime_journal.jsonl
+data/chat_governor_journal.jsonl
 .streamlit/secrets.toml
 terminals/
 .cursor
 *.md
 !README.md
+scripts/demo_conversations.py
+tests

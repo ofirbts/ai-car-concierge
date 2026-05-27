@@ -74,7 +74,7 @@ def create_app() -> FastAPI:
     cors_raw = settings.cors_origins or os.environ.get("CORS_ORIGINS", "*")
     origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
 
-    application = FastAPI(title="AI Car Concierge", version="1.0.0", lifespan=lifespan)
+    application = FastAPI(title="AI Car Concierge", version="1.1.0", lifespan=lifespan)
     application.state.limiter = limiter
     application.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     application.add_middleware(
@@ -133,6 +133,11 @@ def create_app() -> FastAPI:
         return {
             "service": "AI Car Concierge API",
             "version": application.version,
+            "features": {
+                "conversational_sales": True,
+                "session_id": True,
+                "job_broker": True,
+            },
             "openapi": "/openapi.json",
             "docs": "/docs",
             "health": "/health",

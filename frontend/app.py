@@ -46,7 +46,7 @@ def _parse_chat_response(response: httpx.Response) -> tuple[str, dict, bool]:
 
 st.set_page_config(page_title="AI Car Concierge", page_icon="🚗", layout="centered")
 st.title("AI Car Concierge")
-st.caption("Hybrid RAG · SQLite inventory · Gemini · Resend automations")
+st.caption("Conversational sales agent · Hybrid RAG · SQLite · Gemini · Resend")
 
 with st.sidebar:
     st.subheader("Your details")

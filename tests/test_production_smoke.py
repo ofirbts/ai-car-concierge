@@ -78,3 +78,24 @@ def test_production_chat_with_api_key(production_key):
     assert "reply" in data
     assert "tesla" in data["reply"].lower()
     assert len(data["reply"]) > 0
+
+
+def test_production_api_version_and_conversational_sales(production_key):
+    root = httpx.get(f"{PRODUCTION_URL}/", timeout=60.0)
+    assert root.status_code == 200
+    root_data = root.json()
+    assert root_data.get("version") == "1.1.0", root_data
+    assert root_data.get("features", {}).get("conversational_sales") is True
+
+    response = httpx.post(
+        f"{PRODUCTION_URL}/api/chat",
+        json={"message": "I'm looking for a family car"},
+        headers={"X-API-Key": production_key},
+        timeout=90.0,
+    )
+    assert response.status_code == 200, response.text[:300]
+    data = response.json()
+    assert data.get("session_id"), data
+    assert data.get("dialogue_phase") == "discovery", data
+    assert "?" in data["reply"], data["reply"][:200]
+    assert data.get("intent") == "general_chat"
