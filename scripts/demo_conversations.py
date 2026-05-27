@@ -15,7 +15,6 @@ os.environ["GOOGLE_API_KEY"] = ""
 os.environ["GEMINI_API_KEY"] = ""
 
 from backend.config import bootstrap
-from backend.conversation_state import DialoguePhase
 from backend.database import init_db
 from backend.orchestrator import ChatRequest, handle_chat
 from backend.rag_service import PolicyRAGService
@@ -49,63 +48,37 @@ def run_conversation(title: str, turns: list[str]) -> None:
 
 SCENARIOS = [
     (
-        "Scenario 1 — Family with budget",
+        "Scenario 1 — Family road-trip buyer",
         [
             "I'm looking for a car for my family",
-            "four people — two adults and two kids",
-            "budget around 75000",
-            "family trips, space is more important than fuel",
-            "what's the best value?",
+            "four people, budget around 75000",
+            "we do long family trips and cargo space matters",
+            "need space for family trips",
+            "what's the best value here?",
+            "compare your top two",
             "reserve vehicle #55",
         ],
     ),
     (
-        "Scenario 6 — Hebrew family flow",
+        "Scenario 2 — City electric buyer",
         [
-            "אני מחפש רכב למשפחה",
-            "ארבעה אנשים, תקציב 75000",
-            "חשוב מרווח למשפחה",
-            "מה הכי משתלם?",
+            "I mostly drive in the city and want something quiet",
+            "it's just me and my partner",
+            "budget around 75000",
+            "I prefer electric or hybrid",
+            "what would you personally shortlist first?",
+            "hold your top pick for me",
         ],
     ),
     (
-        "Scenario 2 — First-time buyer unsure",
+        "Scenario 3 — Budget-conscious practical buyer",
         [
-            "I'm not sure what car I want, first time buying",
-            "mostly city driving, couple with a baby",
-            "maybe 65000 budget",
-            "recommend something",
-        ],
-    ),
-    (
-        "Scenario 3 — Compare and decide",
-        [
-            "help me find an SUV under 80000",
-            "family of 4",
-            "80000 max",
-            "highway and city mix",
-            "compare #17 and #36",
-            "which is more affordable?",
-        ],
-    ),
-    (
-        "Scenario 4 — Purchase escalation",
-        [
-            "looking for a Tesla for daily commute under 70000",
-            "just me and my partner",
-            "70000",
-            "city driving",
-            "I want to buy the best match",
-        ],
-    ),
-    (
-        "Scenario 5 — Natural language discovery",
-        [
-            "something good for a family, not too expensive",
-            "five people total",
-            "60000",
-            "kids car seats, need room",
-            "show me options",
+            "I need a practical family car but I'm price-sensitive",
+            "family of 4, mostly city and weekend drives",
+            "budget is 60000 max",
+            "these feel expensive, can we go cheaper?",
+            "which one is the smartest value-for-money choice?",
+            "reserve the best value one",
         ],
     ),
 ]
@@ -115,7 +88,7 @@ def main() -> None:
     for title, turns in SCENARIOS:
         run_conversation(title, turns)
     print(f"\n{'=' * 60}")
-    print("Demo complete — 5 conversational purchase flows")
+    print("Demo complete — 3 premium sales flows")
     print("=" * 60)
 
 

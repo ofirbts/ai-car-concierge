@@ -48,22 +48,34 @@ SLOT_LABELS = {
 
 DEMO_FLOWS = [
     {
-        "title": "Family purchase (EN)",
+        "title": "Family road-trip buyer",
         "turns": [
             "I'm looking for a family car",
             "four people, budget 75000",
+            "we do long family trips and cargo space matters",
             "need space for family trips",
-            "what's the best value?",
+            "what's the best value here?",
             "reserve vehicle #55",
         ],
     },
     {
-        "title": "משפחה + תקציב (HE)",
+        "title": "City electric buyer",
         "turns": [
-            "אני מחפש רכב למשפחה",
-            "ארבעה אנשים, תקציב 75000",
-            "חשוב מרווח למשפחה",
-            "מה הכי משתלם?",
+            "I mostly drive in the city and want something quiet",
+            "it's just me and my partner, budget 75000",
+            "I prefer electric or hybrid",
+            "what would you personally shortlist first?",
+            "hold your top pick for me",
+        ],
+    },
+    {
+        "title": "Budget-conscious practical buyer",
+        "turns": [
+            "I need a practical family car but I'm price-sensitive",
+            "family of 4, mostly city and weekend drives",
+            "budget is 60000 max",
+            "these feel expensive, can we go cheaper?",
+            "which one is the smartest value-for-money choice?",
         ],
     },
 ]
@@ -78,25 +90,189 @@ def _parse_chat_response(response: httpx.Response) -> tuple[str, dict, bool]:
     return reply, data, is_blocked
 
 
-def _render_vehicle_cards(vehicles: list[dict]) -> None:
+def _inject_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+            --bg0: #070b13;
+            --bg1: #0e1625;
+            --glass: rgba(17, 25, 40, 0.55);
+            --stroke: rgba(126, 189, 255, 0.22);
+            --text: #f2f7ff;
+            --muted: #9db3cc;
+            --cyan: #55c8ff;
+            --blue: #579dff;
+        }
+        .stApp {
+            background: radial-gradient(1200px 600px at 10% -10%, rgba(68,140,255,.25), transparent 40%),
+                        radial-gradient(1000px 500px at 95% 0%, rgba(85,200,255,.18), transparent 45%),
+                        linear-gradient(180deg, var(--bg1), var(--bg0));
+            color: var(--text);
+        }
+        .main > div {
+            padding-top: 1.2rem;
+        }
+        .aura-hero {
+            border: 1px solid var(--stroke);
+            background: linear-gradient(140deg, rgba(16,24,38,.72), rgba(10,16,28,.62));
+            border-radius: 18px;
+            padding: 16px 18px;
+            margin-bottom: 14px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 16px 40px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.06);
+        }
+        .aura-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: .2px;
+            margin-bottom: 4px;
+        }
+        .aura-sub {
+            color: var(--muted);
+            font-size: .95rem;
+        }
+        .aura-orb {
+            position: absolute;
+            right: 22px;
+            top: 18px;
+            width: 92px;
+            height: 92px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 35% 30%, #d6efff 0%, #82d7ff 18%, #2e7cff 58%, #0f1f3e 100%);
+            box-shadow: 0 0 0 10px rgba(90,168,255,.08), 0 0 48px rgba(63,157,255,.45);
+            animation: pulseOrb 3.2s ease-in-out infinite;
+        }
+        .chip-row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+        }
+        .aura-chip {
+            border: 1px solid var(--stroke);
+            background: rgba(14, 22, 35, 0.68);
+            color: #dce9f8;
+            border-radius: 999px;
+            padding: 6px 11px;
+            font-size: .78rem;
+            line-height: 1;
+        }
+        .chat-wrap {
+            display: flex;
+            margin: 10px 0;
+        }
+        .chat-wrap.user {
+            justify-content: flex-end;
+        }
+        .chat-wrap.assistant {
+            justify-content: flex-start;
+        }
+        .chat-bubble {
+            max-width: 84%;
+            border-radius: 14px;
+            padding: 10px 12px;
+            border: 1px solid var(--stroke);
+            backdrop-filter: blur(8px);
+            animation: fadeUp .3s cubic-bezier(.22,1,.36,1);
+        }
+        .chat-wrap.user .chat-bubble {
+            background: linear-gradient(140deg, rgba(64,117,228,.45), rgba(52,87,165,.35));
+        }
+        .chat-wrap.assistant .chat-bubble {
+            background: linear-gradient(140deg, rgba(18,26,42,.8), rgba(12,20,34,.75));
+        }
+        .chat-wrap.blocked .chat-bubble {
+            background: linear-gradient(140deg, rgba(122,40,40,.58), rgba(82,22,22,.52));
+            border-color: rgba(255,124,124,.35);
+        }
+        .aura-card {
+            border: 1px solid var(--stroke);
+            background: linear-gradient(155deg, rgba(19,29,45,.8), rgba(11,18,31,.75));
+            border-radius: 14px;
+            padding: 12px;
+            margin: 8px 0;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+            transition: transform .2s ease, box-shadow .2s ease;
+        }
+        .aura-card:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 10px 22px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.06);
+        }
+        .aura-card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: #eff6ff;
+        }
+        .aura-card-meta {
+            color: var(--muted);
+            font-size: .86rem;
+            margin-bottom: 6px;
+        }
+        .aura-price {
+            font-size: 1.08rem;
+            font-weight: 700;
+            color: #bfe7ff;
+        }
+        .aura-section-title {
+            margin: 14px 0 6px;
+            color: #d8e7f8;
+            font-size: .93rem;
+            text-transform: uppercase;
+            letter-spacing: .8px;
+        }
+        @keyframes pulseOrb {
+            0% { transform: scale(1); box-shadow: 0 0 0 10px rgba(90,168,255,.08), 0 0 40px rgba(63,157,255,.30); }
+            50% { transform: scale(1.04); box-shadow: 0 0 0 12px rgba(90,168,255,.14), 0 0 56px rgba(63,157,255,.52); }
+            100% { transform: scale(1); box-shadow: 0 0 0 10px rgba(90,168,255,.08), 0 0 40px rgba(63,157,255,.30); }
+        }
+        @keyframes fadeUp {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_hero() -> None:
+    st.markdown(
+        """
+        <div class="aura-hero">
+            <div class="aura-title">AURA AI Advisor</div>
+            <div class="aura-sub">Premium conversational automotive guidance</div>
+            <div class="chip-row">
+                <span class="aura-chip">Memory-aware</span>
+                <span class="aura-chip">Reasoning-first</span>
+                <span class="aura-chip">Shortlist intelligence</span>
+                <span class="aura-chip">Reservation-ready</span>
+            </div>
+            <div class="aura-orb"></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_vehicle_cards(vehicles: list[dict], *, title: str = "Recommended vehicles") -> None:
     if not vehicles:
         return
-    st.markdown("**Recommended vehicles**")
-    for vehicle in vehicles[:4]:
-        with st.container(border=True):
-            cols = st.columns([3, 1])
-            with cols[0]:
-                st.markdown(
-                    f"**#{vehicle['id']}** · {vehicle['year']} {vehicle['make']} {vehicle['model']}"
-                )
-                st.caption(
-                    f"{vehicle.get('color', '')} · {vehicle.get('fuel_type', '')} · "
-                    f"stock {vehicle.get('stock_count', 0)}"
-                )
-            with cols[1]:
-                st.markdown(f"**${vehicle['price']:,.0f}**")
-            if vehicle.get("pending_delisting"):
-                st.warning("Pending De-listing (pre-2022)")
+    st.markdown(f"<div class='aura-section-title'>{title}</div>", unsafe_allow_html=True)
+    for vehicle in vehicles[:3]:
+        pending = " · Pending De-listing" if vehicle.get("pending_delisting") else ""
+        st.markdown(
+            (
+                "<div class='aura-card'>"
+                f"<div class='aura-card-title'>#{vehicle['id']} · {vehicle['year']} {vehicle['make']} {vehicle['model']}</div>"
+                f"<div class='aura-card-meta'>{vehicle.get('color','')} · {vehicle.get('fuel_type','')} · stock {vehicle.get('stock_count',0)}{pending}</div>"
+                f"<div class='aura-price'>${vehicle['price']:,.0f}</div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
 
 
 def _render_progress(progress: dict) -> None:
@@ -142,8 +318,8 @@ def _send_chat(payload: dict) -> tuple[str, dict, bool]:
 
 
 st.set_page_config(page_title="AI Car Concierge", page_icon="🚗", layout="wide")
-st.title("AI Car Concierge")
-st.caption("Conversational sales agent · Hybrid RAG · SQLite · Gemini · Resend")
+_inject_theme()
+_render_hero()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -203,19 +379,43 @@ with st.sidebar:
 chat_col, _ = st.columns([1, 0.01])
 
 with chat_col:
+    info_chips = []
+    if st.session_state.dialogue_phase:
+        info_chips.append(f"Phase: {st.session_state.dialogue_phase}")
+    if st.session_state.session_id:
+        info_chips.append("Session active")
+    if st.session_state.shortlist_vehicles:
+        info_chips.append(f"Shortlist {len(st.session_state.shortlist_vehicles)}")
+    if info_chips:
+        st.markdown(
+            "<div class='chip-row'>" + "".join([f"<span class='aura-chip'>{chip}</span>" for chip in info_chips]) + "</div>",
+            unsafe_allow_html=True,
+        )
+
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            if message.get("blocked"):
-                st.warning(message["content"])
-            else:
-                st.markdown(message["content"])
-            if message.get("vehicles"):
-                _render_vehicle_cards(message["vehicles"])
+        role = message["role"]
+        blocked = message.get("blocked", False)
+        role_cls = "user" if role == "user" else "assistant"
+        if blocked:
+            role_cls = f"{role_cls} blocked"
+        body = message["content"].replace("\n", "<br>")
+        st.markdown(
+            (
+                f"<div class='chat-wrap {role_cls}'>"
+                f"<div class='chat-bubble'>{body}</div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+        if message.get("vehicles") and role == "assistant":
+            _render_vehicle_cards(message["vehicles"])
 
     if prompt := st.chat_input("Tell me what you need — budget, family size, preferences…"):
         st.session_state.messages.append({"role": "user", "content": prompt, "blocked": False})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+        st.markdown(
+            f"<div class='chat-wrap user'><div class='chat-bubble'>{prompt}</div></div>",
+            unsafe_allow_html=True,
+        )
 
         payload: dict = {"message": prompt}
         if st.session_state.session_id:
@@ -237,53 +437,47 @@ with chat_col:
         if user_email and user_email.strip():
             payload["user_email"] = user_email.strip()
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    reply, data, is_blocked = _send_chat(payload)
-                    vehicles = data.get("vehicles") or []
-                    if data.get("session_id"):
-                        st.session_state.session_id = data["session_id"]
-                    if data.get("conversation_progress"):
-                        st.session_state.conversation_progress = data["conversation_progress"]
+        with st.spinner("Aura is reasoning..."):
+            try:
+                reply, data, is_blocked = _send_chat(payload)
+                vehicles = data.get("vehicles") or []
+                if data.get("session_id"):
+                    st.session_state.session_id = data["session_id"]
+                if data.get("conversation_progress"):
+                    st.session_state.conversation_progress = data["conversation_progress"]
+                if data.get("dialogue_phase"):
+                    st.session_state.dialogue_phase = data["dialogue_phase"]
+                if data.get("reserved_vehicle"):
+                    rv = data["reserved_vehicle"]
+                    vehicles = [rv]
+                if vehicles:
+                    st.session_state.shortlist_vehicles = vehicles
+                if settings.show_debug_meta:
+                    meta = []
                     if data.get("dialogue_phase"):
-                        st.session_state.dialogue_phase = data["dialogue_phase"]
-                    if vehicles:
-                        st.session_state.shortlist_vehicles = vehicles
-                    if settings.show_debug_meta:
-                        meta = []
-                        if data.get("dialogue_phase"):
-                            meta.append(f"phase: `{data['dialogue_phase']}`")
-                        if data.get("intent"):
-                            meta.append(f"intent: `{data['intent']}`")
-                        if data.get("rag_mode"):
-                            meta.append(f"rag: `{data['rag_mode']}`")
-                        if data.get("email_sent"):
-                            meta.append("email sent")
-                        if data.get("reserved_vehicle"):
-                            v = data["reserved_vehicle"]
-                            meta.append(f"reserved #{v['id']}")
-                        if meta:
-                            reply += "\n\n---\n" + " · ".join(meta)
-                    if is_blocked:
-                        st.warning(reply)
-                    else:
-                        st.markdown(reply)
-                    if vehicles and not is_blocked:
-                        _render_vehicle_cards(vehicles)
-                except httpx.ConnectError:
-                    reply = (
-                        f"Cannot reach backend at {BACKEND_URL}.\n\n"
-                        "Start API: `uvicorn backend.main:app --reload`"
-                    )
-                    is_blocked = False
-                    vehicles = []
-                    st.error(reply)
-                except Exception:
-                    reply = "Unexpected error talking to the backend."
-                    is_blocked = False
-                    vehicles = []
-                    st.error(reply)
+                        meta.append(f"phase: `{data['dialogue_phase']}`")
+                    if data.get("intent"):
+                        meta.append(f"intent: `{data['intent']}`")
+                    if data.get("rag_mode"):
+                        meta.append(f"rag: `{data['rag_mode']}`")
+                    if data.get("email_sent"):
+                        meta.append("email sent")
+                    if data.get("reserved_vehicle"):
+                        v = data["reserved_vehicle"]
+                        meta.append(f"reserved #{v['id']}")
+                    if meta:
+                        reply += "\n\n---\n" + " · ".join(meta)
+            except httpx.ConnectError:
+                reply = (
+                    f"Cannot reach backend at {BACKEND_URL}.\n\n"
+                    "Start API: `uvicorn backend.main:app --reload`"
+                )
+                is_blocked = False
+                vehicles = []
+            except Exception:
+                reply = "Unexpected error talking to the backend."
+                is_blocked = False
+                vehicles = []
 
         st.session_state.messages.append(
             {

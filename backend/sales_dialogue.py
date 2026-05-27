@@ -138,6 +138,8 @@ def _parse_passengers(message: str) -> int | None:
         return 4
     if re.search(r"\bcouple\b|\btwo people\b|\bזוג\b", lower):
         return 2
+    if re.search(r"\bme and my partner\b|\bmy partner and i\b", lower):
+        return 2
     if re.search(r"\bpair\b", lower):
         return 2
     if re.search(r"\bfamily\b|\bkids\b|\bchildren\b|\bמשפחה\b|\bילדים\b", lower):
@@ -325,6 +327,42 @@ def _is_preference_refinement(message: str, state: ConversationState) -> bool:
     )
 
 
+def _is_budget_objection(message: str) -> bool:
+    lower = message.lower()
+    return bool(
+        re.search(
+            r"\b(too expensive|expensive|cheaper|lower budget|over budget|budget issue|can't afford)\b",
+            lower,
+        )
+    )
+
+
+def _handle_budget_objection(state: ConversationState) -> SalesTurnResult | None:
+    if not state.last_recommended_ids:
+        return None
+    vehicles = _vehicles_from_ids(state.last_recommended_ids[:6])
+    if not vehicles:
+        return None
+    cheaper = sorted(vehicles, key=lambda v: v.price)[:3]
+    best = cheaper[0]
+    alternatives = ", ".join(f"#{v.id}" for v in cheaper[:3])
+    reply = (
+        f"Fair point. If we prioritize value, I'd start with #{best.id} at ${best.price:,.0f}. "
+        f"It's the best cost-to-space balance in your current shortlist. "
+        f"I can compare {alternatives}, or hold #{best.id} now if you want to lock it in."
+    )
+    state.phase = DialoguePhase.RECOMMENDING
+    save_conversation_state(state)
+    return SalesTurnResult(
+        reply=reply,
+        state=state,
+        vehicles=cheaper,
+        intent=IntentKind.INVENTORY_SEARCH,
+        phase=state.phase,
+        rag_mode="sales_dialogue+budget_objection",
+    )
+
+
 def _vehicles_from_ids(ids: list[int]) -> list[Vehicle]:
     out: list[Vehicle] = []
     for vid in ids:
@@ -352,17 +390,16 @@ def _handle_preference_refinement(
     ids_hint = " vs ".join(f"#{v.id}" for v in ranked[:3])
     if state.space_priority == "space":
         reply = (
-            f"Understood — I'll prioritize space for your family trips. "
+            f"Since you said space matters most, I'd prioritize comfort and cabin room. "
             f"From your shortlist, the {best.year} {best.make} {best.model} (#{best.id}) "
-            f"is the strongest fit for room and comfort. "
-            f"Want a quick compare ({ids_hint}), or say reserve #{best.id}?"
+            f"is still the strongest overall fit. "
+            f"Want a quick compare ({ids_hint}), or want me to hold #{best.id} now?"
         )
     else:
         reply = (
-            f"Got it — I've noted that preference. "
-            f"Your top shortlist pick for family use is still the "
+            f"Got it. Based on your preference update, your top shortlist pick is still the "
             f"{best.year} {best.make} {best.model} (#{best.id}). "
-            f"Compare ({ids_hint}), pick another option, or reserve when ready."
+            f"We can compare ({ids_hint}) quickly, or I can reserve #{best.id} now."
         )
     state.phase = DialoguePhase.RECOMMENDING
     save_conversation_state(state)
@@ -396,6 +433,11 @@ def handle_sales_turn(
 ) -> SalesTurnResult:
     state.bump_turn()
     update_state_from_message(state, message, extracted, user_email)
+
+    if _is_budget_objection(message):
+        budget_turn = _handle_budget_objection(state)
+        if budget_turn is not None:
+            return budget_turn
 
     if state.turn_count == 1 and not state.filled_slots():
         reply = generate_welcome(state)
@@ -532,7 +574,7 @@ def handle_sales_turn(
             rag_mode="sales_dialogue",
         )
 
-    retrieval = hybrid_search_inventory(message, state=state, extracted=extracted, limit=4)
+    retrieval = hybrid_search_inventory(message, state=state, extracted=extracted, limit=3)
     vehicles = retrieval.vehicles
     state.last_recommended_ids = [v.id for v in vehicles]
     state.shortlist_ids = list(dict.fromkeys(state.shortlist_ids + state.last_recommended_ids))
