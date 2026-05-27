@@ -2,7 +2,8 @@
 
 | Decision | Why | Rejected alternative |
 |----------|-----|-------------------|
-| Deterministic replies | Prevent price/stock hallucination | Gemini paraphrase on inventory |
+| Grounded sales NLG | Gemini phrases replies; prices/stock only from vehicle facts in context, `reply_prices_grounded`, and template fallback | Free-form paraphrase on inventory |
+| Deterministic inventory/policy text | Search listings and policy answers stay template- or chunk-based | LLM inventing stock or policy |
 | Keyword + Gemini intent | CI works without API key; predictable tests | LLM-only routing |
 | SQLite | 24h MVP, single file deploy | Postgres (next step) |
 | No Text-to-SQL | Injection + wrong joins risk | LLM-generated SQL |

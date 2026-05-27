@@ -7,6 +7,7 @@ os.environ.setdefault("GOOGLE_API_KEY", "")
 os.environ.setdefault("GEMINI_API_KEY", "")
 os.environ.setdefault("RESEND_API_KEY", "")
 os.environ.setdefault("CHAT_GOVERNOR_JOURNAL", "/tmp/ai_car_concierge_chat_governor_test.jsonl")
+os.environ.setdefault("ENABLE_EXPERIMENTAL", "true")
 
 import pytest
 from fastapi.testclient import TestClient

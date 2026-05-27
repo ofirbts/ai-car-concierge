@@ -14,4 +14,6 @@ data/car_inventory.db.sqlhash
 SUBMISSION_EMAIL.txt
 .repo_audit/
 data/*_journal.jsonl
+*LangGraph*.md
+בניית אפליקציית Multi-Agent עם LangGraph על AWS - שיעור 1.md
     

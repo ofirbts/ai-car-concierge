@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     chat_rate_limit: str = Field(default="30/minute", validation_alias="CHAT_RATE_LIMIT")
     cors_origins: str = Field(default="*", validation_alias="CORS_ORIGINS")
     validation_profile: str = Field(default="normal", validation_alias="VALIDATION_PROFILE")
+    enable_experimental: bool = Field(default=False, validation_alias="ENABLE_EXPERIMENTAL")
 
     def has_google_api(self) -> bool:
         return bool(self.google_api_key.strip())

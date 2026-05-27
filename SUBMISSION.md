@@ -119,4 +119,8 @@ Prices and stock are never invented by the model in the happy path; they are cop
 
 ### Out of scope for reviewer demo
 
-`job_broker`, `codebase_packager`, and `ResilientIterationController` are engineering extras. Start with **Streamlit UI → `POST /api/chat` → hybrid RAG + policy + conversational sales**.
+`job_broker`, `codebase_packager`, and `ResilientIterationController` are engineering extras. Production sets `ENABLE_EXPERIMENTAL=false` so these routes are **not** in OpenAPI. Start with **Streamlit UI → `POST /api/chat` → hybrid RAG + policy + conversational sales**.
+
+### Persistent disk (Render)
+
+Service **ai-car-concierge-api** uses a 1GB disk at `/app/data` (`render.yaml`). After deploy, verify once: `POST /api/chat` → `reserve vehicle #16` twice → `GET /vehicles/16` shows `stock_count` decremented and stable across redeploy on the same service.

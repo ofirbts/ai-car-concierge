@@ -131,14 +131,16 @@ def create_app() -> FastAPI:
 
     @application.get("/")
     def root():
+        features: dict[str, bool] = {
+            "conversational_sales": True,
+            "session_id": True,
+        }
+        if settings.enable_experimental:
+            features["experimental_api"] = True
         return {
             "service": "AI Car Concierge API",
             "version": application.version,
-            "features": {
-                "conversational_sales": True,
-                "session_id": True,
-                "job_broker": True,
-            },
+            "features": features,
             "openapi": "/openapi.json",
             "docs": "/docs",
             "health": "/health",
@@ -264,26 +266,41 @@ def create_app() -> FastAPI:
     ):
         return search_policies(q, top_k=top_k)
 
+    if settings.enable_experimental:
+        _register_experimental_routes(application)
+
+    return application
+
+
+class JobSubmitRequest(BaseModel):
+    kind: str
+    payload: dict
+
+
+class JobSubmitResponse(BaseModel):
+    job_id: str
+    state: JobState
+
+
+class IterationRunRequest(BaseModel):
+    run_id: str
+    initial_state: dict[str, object] = Field(default_factory=dict)
+    steps: list[str] = Field(default_factory=list)
+
+
+def _register_experimental_routes(application: FastAPI) -> None:
+    def _run_packager_job(payload: dict, context) -> dict:
+        packed = package_codebase(PackagerRequest.model_validate(payload))
+        if context.is_cancelled():
+            return {"cancelled": True}
+        return packed.model_dump(mode="json")
+
     @application.post("/skills/codebase-packager")
     def skill_codebase_packager(
         request: PackagerRequest,
         _: None = Depends(require_api_key),
     ):
         return package_codebase(request)
-
-    class JobSubmitRequest(BaseModel):
-        kind: str
-        payload: dict
-
-    class JobSubmitResponse(BaseModel):
-        job_id: str
-        state: JobState
-
-    def _run_packager_job(payload: dict, context) -> dict:
-        packed = package_codebase(PackagerRequest.model_validate(payload))
-        if context.is_cancelled():
-            return {"cancelled": True}
-        return packed.model_dump(mode="json")
 
     @application.post("/jobs/submit", response_model=JobSubmitResponse)
     def submit_job(
@@ -321,11 +338,6 @@ def create_app() -> FastAPI:
             )
         return {"job_id": job_id, "cancelled": True}
 
-    class IterationRunRequest(BaseModel):
-        run_id: str
-        initial_state: dict[str, object] = Field(default_factory=dict)
-        steps: list[str] = Field(default_factory=list)
-
     @application.post("/governor/iteration/run")
     def run_iteration(
         body: IterationRunRequest,
@@ -340,8 +352,6 @@ def create_app() -> FastAPI:
             steps=handlers,
         )
         return result.model_dump(mode="json")
-
-    return application
 
 
 app = create_app()

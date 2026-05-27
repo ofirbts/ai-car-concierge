@@ -25,7 +25,7 @@ jobs:
           python-version: "3.11"
       - run: pip install -r requirements.txt
       - run: pip install pip-audit && pip-audit -r requirements.txt
-      - run: pytest -q --ignore=tests/test_production_smoke.py
+      - run: pytest -q --ignore=tests/test_production_smoke.py -m "not live"
       - run: pytest -q tests/test_production_smoke.py::test_production_ready
       - run: pytest -q tests/test_production_smoke.py::test_production_chat_requires_key
 

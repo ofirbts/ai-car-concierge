@@ -107,7 +107,7 @@ See [docs/DECISIONS.md](docs/DECISIONS.md) for tradeoffs. Build timeline: [docs/
 - `policy.md` (2022+ sales only) overrides DB display semantics.
 - `year < 2022` → `pending_delisting`; block reserve/purchase (HTTP **409** on actions).
 - Questions mentioning a pre-2022 year (e.g. “2020 BMW”) → `legacy_year_conflict`.
-- Inventory and hybrid replies use **structured DB/RAG text only** (no LLM paraphrase on prices/stock).
+- Inventory prices and stock come from **SQLite only**; sales NLG runs **price grounding + template fallback** (`backend/grounding.py`).
 - Policy replies are deterministic from retrieved chunks (no synthesis).
 
 ## Known limitations (MVP honesty)
