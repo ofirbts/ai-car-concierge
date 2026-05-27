@@ -461,7 +461,11 @@ with chat_col:
             unsafe_allow_html=True,
         )
         if _should_show_vehicle_cards(st.session_state.messages, idx, message):
-            title = "Reserved" if len(message["vehicles"]) == 1 and st.session_state.dialogue_phase == "completed" else "Top picks"
+            reserved = message.get("reserved") or (
+                len(message["vehicles"]) == 1
+                and message.get("content", "").lower().startswith("done")
+            )
+            title = "Reserved" if reserved else "Top picks"
             _render_vehicle_cards(message["vehicles"], title=title)
 
     if prompt := st.chat_input("Tell me what you need — budget, family size, preferences…"):
@@ -492,6 +496,8 @@ with chat_col:
             payload["user_email"] = user_email.strip()
 
         show_cards = True
+        data: dict = {}
+        reserved_flag = False
         with st.spinner("Aura is reasoning..."):
             try:
                 reply, data, is_blocked = _send_chat(payload)
@@ -508,6 +514,7 @@ with chat_col:
                 if vehicles:
                     st.session_state.shortlist_vehicles = vehicles
                 show_cards = data.get("show_vehicle_cards", True)
+                reserved_flag = bool(data.get("reserved_vehicle"))
                 if settings.show_debug_meta:
                     meta = []
                     if data.get("dialogue_phase"):
@@ -544,6 +551,7 @@ with chat_col:
                 "blocked": is_blocked,
                 "vehicles": vehicles if not is_blocked else [],
                 "show_vehicle_cards": show_cards if not is_blocked else False,
+                "reserved": reserved_flag if not is_blocked else False,
             }
         )
         st.rerun()

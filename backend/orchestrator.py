@@ -416,6 +416,7 @@ def _try_sales_dialogue(
         audit("reserve", "success", vehicle_id=reserved.id)
         turn.state.phase = DialoguePhase.COMPLETED
         save_conversation_state(turn.state)
+        turn.phase = DialoguePhase.COMPLETED
         turn.reply = (
             f"Done — I've reserved the {reserved.year} {reserved.make} {reserved.model} "
             f"(#{reserved.id}) for you. Remaining stock: {reserved.stock_count}."

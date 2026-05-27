@@ -35,17 +35,17 @@ def _pick(options: list[str], state: ConversationState, shift: int = 0) -> str:
 
 
 def _memory_callback(state: ConversationState) -> str:
-    callbacks: list[str] = []
-    if state.use_case:
-        callbacks.append(f"Since you mentioned {state.use_case},")
+    use = (state.use_case or "").lower()
+    if "city" in use or "weekend" in use:
+        return "Since you mentioned city and weekend driving,"
     if state.space_priority == "space":
-        callbacks.append("Because cabin room matters more than efficiency for you,")
+        return "Because cabin room matters more than efficiency for you,"
     if state.space_priority == "fuel":
-        callbacks.append("Since efficiency matters for your use case,")
+        return "Since efficiency matters for your use case,"
+    if state.use_case:
+        return f"Since you mentioned {state.use_case},"
     if state.passengers and state.passengers >= 4:
-        callbacks.append("For a family setup,")
-    if callbacks:
-        return callbacks[(state.turn_count - 1) % len(callbacks)]
+        return "For a family setup,"
     return "Based on what you've shared,"
 
 
@@ -63,6 +63,8 @@ def _reason_for_vehicle(state: ConversationState, vehicle: Vehicle, rank: int) -
     fuel = vehicle.fuel_type.lower()
 
     if "navigator" in model_lower:
+        if _is_city_focus(state):
+            return "you get SUV practicality without feeling oversized on daily city runs"
         return "the extra cabin space is immediate on long family drives"
     if "escalade" in model_lower:
         return "you get the most commanding third-row comfort in this shortlist"
@@ -122,8 +124,13 @@ def _dedupe_sentences(text: str) -> str:
     return " ".join(kept)
 
 
+def _join_prose(*parts: str) -> str:
+    return " ".join(part.strip() for part in parts if part and part.strip())
+
+
 def polish_response(text: str) -> str:
     compact = re.sub(r"\n{3,}", "\n\n", text.strip())
+    compact = re.sub(r"\.([A-Z])", r". \1", compact)
     compact = _replace_disallowed_phrases(compact)
     compact = _dedupe_sentences(compact)
     compact = _limit_vehicle_mentions(compact, max_mentions=3)
@@ -173,7 +180,7 @@ def _fallback_recommendations(state: ConversationState, vehicles: list[Vehicle])
         state,
         shift=1,
     )
-    return f"{lead}{alt_line} {closer}"
+    return _join_prose(lead, alt_line, closer)
 
 
 def _fallback_comparison(state: ConversationState, vehicles: list[Vehicle]) -> str:

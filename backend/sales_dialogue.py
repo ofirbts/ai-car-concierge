@@ -198,10 +198,12 @@ def _parse_fuel(message: str) -> str | None:
 
 def _parse_use_case(message: str) -> str | None:
     lower = message.lower()
-    if re.search(r"\bfamily\b|\bkids\b|\bchildren\b|\bמשפחה\b", lower):
-        return "family trips"
+    if re.search(r"\bcity\b", lower) and re.search(r"\bweekend\b", lower):
+        return "city and weekend drives"
     if re.search(r"\bcity\b|\burban\b|\bcommute\b|\bעיר\b", lower):
         return "city driving"
+    if re.search(r"\bfamily\b|\bkids\b|\bchildren\b|\bמשפחה\b", lower):
+        return "family trips"
     if re.search(r"\bhighway\b|\blong drive\b", lower):
         return "highway travel"
     if re.search(r"\bwork\b|\bdaily\b", lower):
@@ -280,13 +282,27 @@ def update_state_from_message(
 def _next_discovery_question(state: ConversationState) -> str | None:
     if state.passengers is None and state.family_size is None:
         return "How many people usually ride along with you?"
-    if state.budget is None:
-        return "What's your target budget (roughly)?"
     if not state.use_case and not state.body_type:
         return "What will you mainly use the car for — family trips, city driving, or something else?"
+    if state.budget is None:
+        return "What's your target budget (roughly)?"
     if state.space_priority is None and (state.passengers or 0) >= 3:
         return "Do you care more about interior space or fuel economy?"
     return None
+
+
+def _contextual_discovery_question(state: ConversationState, question: str) -> str:
+    if question == "What's your target budget (roughly)?":
+        parts: list[str] = []
+        if state.passengers:
+            parts.append(f"{state.passengers} riders")
+        if state.use_case:
+            parts.append(state.use_case)
+        if parts:
+            return f"Got it — {', '.join(parts)}. What budget should I stay within?"
+    if question.startswith("How many people") and state.use_case:
+        return f"For {state.use_case}, how many people usually ride along?"
+    return question
 
 
 def _resolve_compare_ids(state: ConversationState, message: str) -> list[int]:
@@ -338,29 +354,62 @@ def _is_budget_objection(message: str) -> bool:
     )
 
 
-def _handle_budget_objection(state: ConversationState) -> SalesTurnResult | None:
+def _handle_budget_objection(
+    state: ConversationState,
+    message: str,
+) -> SalesTurnResult | None:
     if not state.last_recommended_ids:
         return None
-    vehicles = _vehicles_from_ids(state.last_recommended_ids[:6])
-    if not vehicles:
+    current = _vehicles_from_ids(state.last_recommended_ids[:6])
+    if not current:
         return None
-    cheaper = sorted(vehicles, key=lambda v: v.price)[:3]
-    best = cheaper[0]
-    alternatives = ", ".join(f"#{v.id}" for v in cheaper[:3])
-    reply = (
-        f"Fair point. If we prioritize value, I'd start with #{best.id} at ${best.price:,.0f}. "
-        f"It's the best cost-to-space balance in your current shortlist. "
-        f"I can compare {alternatives}, or hold #{best.id} now if you want to lock it in."
+    floor_price = min(v.price for v in current)
+    cap = floor_price - 500
+    if state.budget:
+        cap = min(cap, state.budget * 0.85)
+    cap = max(cap, 12000)
+    extracted = ExtractedIntent(
+        intent=IntentKind.INVENTORY_SEARCH,
+        price_max=cap,
     )
+    query = message.strip() or "affordable practical value under budget"
+    result = hybrid_search_inventory(query, state=state, extracted=extracted, limit=6)
+    fresh = [v for v in result.vehicles if v.price < floor_price]
+    if not fresh:
+        fresh = sorted(current, key=lambda v: v.price)[:3]
+        best = fresh[0]
+        alternatives = ", ".join(f"#{v.id}" for v in fresh[:3])
+        reply = (
+            f"Fair point — within your criteria, #{best.id} at ${best.price:,.0f} is already "
+            f"the strongest value in this shortlist. I can compare {alternatives}, "
+            f"or hold #{best.id} if you want to move now."
+        )
+        show_cards = False
+    else:
+        fresh = sorted(fresh, key=lambda v: v.price)[:3]
+        state.last_recommended_ids = [v.id for v in fresh]
+        state.shortlist_ids = list(dict.fromkeys(state.shortlist_ids + state.last_recommended_ids))
+        state.last_refinement_key = None
+        best = fresh[0]
+        alts = ", ".join(f"#{v.id}" for v in fresh[1:3])
+        reply = (
+            f"Fair point — I looked for stronger value under ${cap:,.0f}. "
+            f"I'd start with the {best.year} {best.make} {best.model} (#{best.id}) at ${best.price:,.0f}."
+        )
+        if alts:
+            reply += f" Also worth a look: {alts}."
+        reply += f" Want a compare, or should I hold #{best.id}?"
+        show_cards = True
     state.phase = DialoguePhase.RECOMMENDING
     save_conversation_state(state)
     return SalesTurnResult(
         reply=reply,
         state=state,
-        vehicles=cheaper,
+        vehicles=fresh,
         intent=IntentKind.INVENTORY_SEARCH,
         phase=state.phase,
         rag_mode="sales_dialogue+budget_objection",
+        show_vehicle_cards=show_cards,
     )
 
 
@@ -459,7 +508,7 @@ def handle_sales_turn(
     update_state_from_message(state, message, extracted, user_email)
 
     if _is_budget_objection(message):
-        budget_turn = _handle_budget_objection(state)
+        budget_turn = _handle_budget_objection(state, message)
         if budget_turn is not None:
             return budget_turn
 
@@ -587,7 +636,7 @@ def handle_sales_turn(
 
     question = _next_discovery_question(state)
     if question and not state.has_discovery_basics():
-        reply = generate_clarifying_question(state, question)
+        reply = generate_clarifying_question(state, _contextual_discovery_question(state, question))
         state.phase = DialoguePhase.DISCOVERY
         save_conversation_state(state)
         return SalesTurnResult(
