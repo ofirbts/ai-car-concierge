@@ -4,7 +4,7 @@ services:
     name: ai-car-concierge-api
     runtime: docker
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /ready
+    healthCheckPath: /health
     disk:
       name: sqlite-data
       mountPath: /app/data
