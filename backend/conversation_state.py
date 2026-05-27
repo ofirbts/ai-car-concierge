@@ -36,6 +36,7 @@ class ConversationState(BaseModel):
     turn_count: int = 0
     last_recommended_ids: list[int] = Field(default_factory=list)
     compare_vehicle_ids: list[int] = Field(default_factory=list)
+    last_refinement_key: str | None = None
 
     def filled_slots(self) -> dict[str, object]:
         out: dict[str, object] = {}

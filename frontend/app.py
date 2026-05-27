@@ -110,6 +110,45 @@ def _inject_theme() -> None:
                         linear-gradient(180deg, var(--bg1), var(--bg0));
             color: var(--text);
         }
+        section[data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0b1220 0%, #070b13 100%);
+            border-right: 1px solid var(--stroke);
+        }
+        section[data-testid="stSidebar"] * {
+            color: var(--text);
+        }
+        section[data-testid="stSidebar"] .stTextInput input,
+        section[data-testid="stSidebar"] textarea {
+            background: rgba(12, 20, 34, 0.9);
+            border: 1px solid var(--stroke);
+            color: var(--text);
+            border-radius: 10px;
+        }
+        section[data-testid="stSidebar"] .stProgress > div > div {
+            background: linear-gradient(90deg, #3f9dff, #55c8ff);
+        }
+        section[data-testid="stSidebar"] [data-testid="stExpander"] {
+            border: 1px solid var(--stroke);
+            border-radius: 12px;
+            background: rgba(14, 22, 37, 0.72);
+        }
+        section[data-testid="stSidebar"] button {
+            border-radius: 12px;
+            border: 1px solid var(--stroke);
+            background: rgba(18, 28, 46, 0.85);
+            color: var(--text);
+        }
+        section[data-testid="stSidebar"] button:hover {
+            border-color: rgba(126, 189, 255, 0.45);
+            color: #bfe7ff;
+        }
+        section[data-testid="stSidebar"] pre,
+        section[data-testid="stSidebar"] code {
+            background: rgba(10, 16, 28, 0.9);
+            border: 1px solid var(--stroke);
+            color: #c9def5;
+            border-radius: 8px;
+        }
         .main > div {
             padding-top: 1.2rem;
         }
@@ -257,6 +296,20 @@ def _render_hero() -> None:
     )
 
 
+def _should_show_vehicle_cards(messages: list[dict], index: int, message: dict) -> bool:
+    if message.get("role") != "assistant" or not message.get("vehicles"):
+        return False
+    if message.get("show_vehicle_cards") is False:
+        return False
+    if message.get("show_vehicle_cards") is True:
+        return True
+    last_idx = -1
+    for idx, item in enumerate(messages):
+        if item.get("role") == "assistant" and item.get("vehicles"):
+            last_idx = idx
+    return index == last_idx
+
+
 def _render_vehicle_cards(vehicles: list[dict], *, title: str = "Recommended vehicles") -> None:
     if not vehicles:
         return
@@ -392,7 +445,7 @@ with chat_col:
             unsafe_allow_html=True,
         )
 
-    for message in st.session_state.messages:
+    for idx, message in enumerate(st.session_state.messages):
         role = message["role"]
         blocked = message.get("blocked", False)
         role_cls = "user" if role == "user" else "assistant"
@@ -407,8 +460,9 @@ with chat_col:
             ),
             unsafe_allow_html=True,
         )
-        if message.get("vehicles") and role == "assistant":
-            _render_vehicle_cards(message["vehicles"])
+        if _should_show_vehicle_cards(st.session_state.messages, idx, message):
+            title = "Reserved" if len(message["vehicles"]) == 1 and st.session_state.dialogue_phase == "completed" else "Top picks"
+            _render_vehicle_cards(message["vehicles"], title=title)
 
     if prompt := st.chat_input("Tell me what you need — budget, family size, preferences…"):
         st.session_state.messages.append({"role": "user", "content": prompt, "blocked": False})
@@ -437,6 +491,7 @@ with chat_col:
         if user_email and user_email.strip():
             payload["user_email"] = user_email.strip()
 
+        show_cards = True
         with st.spinner("Aura is reasoning..."):
             try:
                 reply, data, is_blocked = _send_chat(payload)
@@ -452,6 +507,7 @@ with chat_col:
                     vehicles = [rv]
                 if vehicles:
                     st.session_state.shortlist_vehicles = vehicles
+                show_cards = data.get("show_vehicle_cards", True)
                 if settings.show_debug_meta:
                     meta = []
                     if data.get("dialogue_phase"):
@@ -474,10 +530,12 @@ with chat_col:
                 )
                 is_blocked = False
                 vehicles = []
+                show_cards = False
             except Exception:
                 reply = "Unexpected error talking to the backend."
                 is_blocked = False
                 vehicles = []
+                show_cards = False
 
         st.session_state.messages.append(
             {
@@ -485,6 +543,7 @@ with chat_col:
                 "content": reply,
                 "blocked": is_blocked,
                 "vehicles": vehicles if not is_blocked else [],
+                "show_vehicle_cards": show_cards if not is_blocked else False,
             }
         )
         st.rerun()

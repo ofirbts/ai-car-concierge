@@ -57,26 +57,34 @@ def _is_family_focus(state: ConversationState) -> bool:
     return bool((state.passengers or 0) >= 4 or (state.use_case and "family" in state.use_case.lower()))
 
 
-def _vehicle_reasoning(state: ConversationState, vehicle: Vehicle, rank: int) -> str:
-    model = f"{vehicle.year} {vehicle.make} {vehicle.model}"
+def _reason_for_vehicle(state: ConversationState, vehicle: Vehicle, rank: int) -> str:
+    model_lower = vehicle.model.lower()
     body = infer_body_type(vehicle)
-    reasons: list[str] = []
+    fuel = vehicle.fuel_type.lower()
+
+    if "navigator" in model_lower:
+        return "the extra cabin space is immediate on long family drives"
+    if "escalade" in model_lower:
+        return "you get the most commanding third-row comfort in this shortlist"
+    if "rx" in model_lower:
+        return "the ride feels refined and quiet, especially for daily family use"
+    if "xc90" in model_lower:
+        return "it balances Scandinavian practicality with real road-trip comfort"
+    if "model 3" in model_lower or "model y" in model_lower:
+        return "city driving stays smooth, quiet, and easy to live with"
+    if "x5" in model_lower:
+        return "it hits a sweet spot between comfort and confident highway manners"
     if _is_family_focus(state) and body == "suv":
-        reasons.append("you will feel the extra room immediately on family drives")
-    if _is_city_focus(state) and "electric" in vehicle.fuel_type.lower():
-        reasons.append("it stays smooth and quiet in city traffic")
+        return "you will notice the extra room the moment everyone gets in"
+    if _is_city_focus(state) and "electric" in fuel:
+        return "it feels calm and efficient in stop-and-go traffic"
     if state.space_priority == "space" and body == "suv":
-        reasons.append("it gives you stronger cargo flexibility")
-    if state.space_priority == "fuel" and any(
-        token in vehicle.fuel_type.lower() for token in ("electric", "hybrid")
-    ):
-        reasons.append("it keeps running costs more predictable")
-    if state.budget and vehicle.price <= state.budget:
-        reasons.append("it stays comfortably inside your target range")
+        return "cargo flexibility is clearly stronger than the alternatives here"
+    if state.space_priority == "fuel" and ("electric" in fuel or "hybrid" in fuel):
+        return "running costs stay more predictable week to week"
     if rank == 0:
-        reasons.append("this is likely your strongest overall fit")
-    core = reasons[0] if reasons else "it feels like a balanced fit for your profile"
-    return f"I'd shortlist the {model} (#{vehicle.id}) first because {core}."
+        return "this is probably your strongest overall fit so far"
+    return "it is a balanced match for how you plan to use the car"
 
 
 def _replace_disallowed_phrases(text: str) -> str:
@@ -101,9 +109,23 @@ def _limit_vehicle_mentions(text: str, max_mentions: int = 3) -> str:
     return "\n".join(lines).strip()
 
 
+def _dedupe_sentences(text: str) -> str:
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    seen: set[str] = set()
+    kept: list[str] = []
+    for part in parts:
+        normalized = part.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        kept.append(part.strip())
+    return " ".join(kept)
+
+
 def polish_response(text: str) -> str:
     compact = re.sub(r"\n{3,}", "\n\n", text.strip())
     compact = _replace_disallowed_phrases(compact)
+    compact = _dedupe_sentences(compact)
     compact = _limit_vehicle_mentions(compact, max_mentions=3)
     return compact
 
@@ -121,26 +143,37 @@ def _fallback_recommendations(state: ConversationState, vehicles: list[Vehicle])
             f"I couldn't find in-stock 2022+ matches{budget_note} with what we have so far. "
             "Would you like to adjust your budget or preferred body style?"
         )
+    picks = vehicles[:3]
+    top = picks[0]
     head = _memory_callback(state)
-    opening = _pick(
-        [
-            "I'd personally shortlist these first.",
-            "These feel like your best next options.",
-            "I would start with these three.",
-        ],
-        state,
+    lead = (
+        f"{head} I would start with the {top.year} {top.make} {top.model} (#{top.id}) — "
+        f"{_reason_for_vehicle(state, top, 0).capitalize()}."
     )
-    lines = [_vehicle_reasoning(state, vehicle, idx) for idx, vehicle in enumerate(vehicles[:3])]
+    if len(picks) > 1:
+        alt_a = picks[1]
+        alt_b = picks[2] if len(picks) > 2 else None
+        alt_line = (
+            f"Next, the {alt_a.year} {alt_a.make} {alt_a.model} (#{alt_a.id}) is worth considering if "
+            f"{_reason_for_vehicle(state, alt_a, 1)}."
+        )
+        if alt_b:
+            alt_line += (
+                f" The {alt_b.year} {alt_b.make} {alt_b.model} (#{alt_b.id}) is another strong option if "
+                f"{_reason_for_vehicle(state, alt_b, 2)}."
+            )
+    else:
+        alt_line = ""
     closer = _pick(
         [
-            "Want me to walk you through the tradeoffs, or hold one now?",
-            "I can compare the top two quickly, or reserve your top pick now.",
-            "If you want, I can hold your best-fit option while we compare one alternative.",
+            "Want me to walk you through the tradeoffs, or hold this one now?",
+            "I can compare your top two side-by-side, or reserve your leading pick.",
+            "If this feels right, I can hold it while we compare one alternative.",
         ],
         state,
         shift=1,
     )
-    return f"{head} {opening}\n\n" + " ".join(lines) + f"\n\n{closer}"
+    return f"{lead}{alt_line} {closer}"
 
 
 def _fallback_comparison(state: ConversationState, vehicles: list[Vehicle]) -> str:

@@ -77,6 +77,7 @@ class SalesTurnResult:
     rag_mode: str | None = None
     delegate: str | None = None
     vehicle_id: int | None = None
+    show_vehicle_cards: bool = True
 
 
 def has_sales_signal(message: str) -> bool:
@@ -372,6 +373,20 @@ def _vehicles_from_ids(ids: list[int]) -> list[Vehicle]:
     return out
 
 
+def _refinement_key(message: str, state: ConversationState) -> str:
+    if _matches_any(message, SPACE_SIGNALS) or state.space_priority == "space":
+        return "space"
+    if _matches_any(message, FUEL_SIGNALS) or state.fuel_preference:
+        return f"fuel:{state.fuel_preference or ''}"
+    body = _parse_body_type(message) or state.body_type
+    if body:
+        return f"body:{body}"
+    use_case = _parse_use_case(message) or state.use_case
+    if use_case:
+        return f"use:{use_case}"
+    return message.strip().lower()[:48]
+
+
 def _handle_preference_refinement(
     state: ConversationState,
     message: str,
@@ -388,7 +403,14 @@ def _handle_preference_refinement(
     )
     best = ranked[0]
     ids_hint = " vs ".join(f"#{v.id}" for v in ranked[:3])
-    if state.space_priority == "space":
+    refine_key = _refinement_key(message, state)
+    if state.last_refinement_key == refine_key:
+        reply = (
+            f"We are aligned on that priority — I'd still lead with the "
+            f"{best.year} {best.make} {best.model} (#{best.id}). "
+            f"Want a compare ({ids_hint}), or should I hold #{best.id}?"
+        )
+    elif state.space_priority == "space":
         reply = (
             f"Since you said space matters most, I'd prioritize comfort and cabin room. "
             f"From your shortlist, the {best.year} {best.make} {best.model} (#{best.id}) "
@@ -401,15 +423,17 @@ def _handle_preference_refinement(
             f"{best.year} {best.make} {best.model} (#{best.id}). "
             f"We can compare ({ids_hint}) quickly, or I can reserve #{best.id} now."
         )
+    state.last_refinement_key = refine_key
     state.phase = DialoguePhase.RECOMMENDING
     save_conversation_state(state)
     return SalesTurnResult(
         reply=reply,
         state=state,
-        vehicles=ranked,
+        vehicles=[],
         intent=IntentKind.INVENTORY_SEARCH,
         phase=state.phase,
         rag_mode="sales_dialogue+preference_refine",
+        show_vehicle_cards=False,
     )
 
 
@@ -554,6 +578,7 @@ def handle_sales_turn(
             intent=IntentKind.INVENTORY_SEARCH,
             phase=state.phase,
             rag_mode="sales_dialogue",
+            show_vehicle_cards=False,
         )
 
     refinement = _handle_preference_refinement(state, message)
@@ -577,6 +602,7 @@ def handle_sales_turn(
     retrieval = hybrid_search_inventory(message, state=state, extracted=extracted, limit=3)
     vehicles = retrieval.vehicles
     state.last_recommended_ids = [v.id for v in vehicles]
+    state.last_refinement_key = None
     state.shortlist_ids = list(dict.fromkeys(state.shortlist_ids + state.last_recommended_ids))
     state.phase = DialoguePhase.RECOMMENDING
     reply = generate_recommendations(state, vehicles)
