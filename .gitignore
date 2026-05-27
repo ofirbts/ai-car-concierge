@@ -12,4 +12,6 @@ data/car_inventory.db.sqlhash
 .streamlit/secrets.toml
 .gitignore
 SUBMISSION_EMAIL.txt
+.repo_audit/
+data/*_journal.jsonl
     

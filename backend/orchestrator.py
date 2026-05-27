@@ -95,6 +95,7 @@ class ChatResponse(BaseModel):
                 blocked=self.blocked,
                 reserved_vehicle=self.reserved_vehicle,
                 email_sent=self.email_sent,
+                vehicles=self.vehicles,
             )
         )
         self.validation = report

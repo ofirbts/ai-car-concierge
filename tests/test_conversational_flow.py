@@ -1,4 +1,5 @@
 from backend.conversation_state import ConversationState, save_conversation_state
+from backend.grounding import prices_mentioned_in_reply
 from backend.conversation_state import ConversationState, DialoguePhase, save_conversation_state
 from backend.orchestrator import ChatRequest, handle_chat
 from backend.rag_service import PolicyRAGService
@@ -152,6 +153,10 @@ def test_grounded_recommendation_mentions_vehicle_facts(isolated_db):
     assert response.vehicles
     for vehicle in response.vehicles:
         assert str(vehicle.id) in response.reply or vehicle.make in response.reply
+    mentioned = prices_mentioned_in_reply(response.reply)
+    if mentioned:
+        allowed = {int(v.price) for v in response.vehicles}
+        assert mentioned <= allowed
 
 
 def test_policy_question_bypasses_sales_dialogue(isolated_db):

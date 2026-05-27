@@ -14,6 +14,7 @@ from slowapi.util import get_remote_address
 from backend.chat_http import chat_http_status
 from backend.codebase_packager import PackagerRequest, package_codebase
 from backend.config import bootstrap, get_settings
+from backend.version import APP_VERSION
 from backend.job_broker import JobBroker, JobState
 from backend.database import (
     IdempotencyConflictError,
@@ -74,7 +75,7 @@ def create_app() -> FastAPI:
     cors_raw = settings.cors_origins or os.environ.get("CORS_ORIGINS", "*")
     origins = [o.strip() for o in cors_raw.split(",") if o.strip()]
 
-    application = FastAPI(title="AI Car Concierge", version="1.2.1", lifespan=lifespan)
+    application = FastAPI(title="AI Car Concierge", version=APP_VERSION, lifespan=lifespan)
     application.state.limiter = limiter
     application.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     application.add_middleware(

@@ -89,7 +89,34 @@ See [README.md](README.md) sections:
 ## Design choices (brief)
 
 - **No Text-to-SQL** — parameterized Python queries only.
-- **No LLM paraphrase on prices/stock** — SQLite + formatted templates.
+- **Gemini for conversational phrasing only** — inventory search, reserves, and stock counts come from SQLite; vehicle facts are injected into the NLG context. If Gemini returns a dollar amount not in that context, the reply falls back to deterministic templates and `output_validation` rejects ungrounded prices.
 - **Policy hierarchy** — `SALES_MIN_YEAR = 2022` in code, aligned with `data/policies/policy.md`.
+- **Session** — `session_id` on `POST /api/chat` powers discovery slots, shortlist, and conversational sales (`features.conversational_sales` on `/`).
 
 Details: [docs/DECISIONS.md](docs/DECISIONS.md)
+
+### What is sent to Gemini
+
+- Policy RAG: top policy chunks (not raw SQL).
+- Sales NLG: slot values + explicit vehicle fact lines (`#id`, make/model, price, stock, fuel).
+- Intent classification (when enabled): user message only.
+
+Prices and stock are never invented by the model in the happy path; they are copied from facts or template fallbacks.
+
+### Troubleshooting (live demo)
+
+| Symptom | Likely cause | Fix |
+|---------|----------------|-----|
+| `401` on `/api/chat` | Missing/wrong `X-API-Key` | Set Streamlit secret `API_KEY` = Render env `API_KEY` |
+| `503` on `/ready` | Render cold start or DB init | Wait 30–60s; retry `/ready` |
+| UI old behavior | Streamlit cache | Streamlit Cloud → **Reboot** + hard refresh |
+| API old version | Deploy still rolling | Check `GET /` → `version` matches `backend/version.py` |
+
+### Security (demo scope)
+
+- Shared secret between Streamlit and Render (`API_KEY`) — demo only, not production IAM.
+- Governor/runtime journals are local dev artifacts (gitignored); not required for the take-home demo.
+
+### Out of scope for reviewer demo
+
+`job_broker`, `codebase_packager`, and `ResilientIterationController` are engineering extras. Start with **Streamlit UI → `POST /api/chat` → hybrid RAG + policy + conversational sales**.

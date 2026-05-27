@@ -5,6 +5,7 @@ import re
 from backend.conversation_state import ConversationState, DialoguePhase
 from backend.database import Vehicle
 from backend.gemini_service import generate_text
+from backend.grounding import reply_prices_grounded
 from backend.inventory_retrieval import infer_body_type
 
 NLG_SYSTEM = (
@@ -236,10 +237,19 @@ def _build_context(
     return "\n".join(lines)
 
 
+def _accept_llm_reply(text: str | None, vehicles: list[Vehicle], fallback: str) -> str:
+    if not text or not text.strip():
+        return polish_response(fallback)
+    polished = polish_response(text.strip())
+    if vehicles and not reply_prices_grounded(polished, vehicles):
+        return polish_response(fallback)
+    return polished
+
+
 def generate_clarifying_question(state: ConversationState, question: str) -> str:
     context = _build_context(state, [], DialoguePhase.DISCOVERY, f"Ask exactly: {question}")
     text = generate_text(NLG_SYSTEM, context)
-    return polish_response(text.strip()) if text else polish_response(_fallback_question(state, question))
+    return _accept_llm_reply(text, [], _fallback_question(state, question))
 
 
 def generate_recommendations(state: ConversationState, vehicles: list[Vehicle]) -> str:
@@ -250,7 +260,7 @@ def generate_recommendations(state: ConversationState, vehicles: list[Vehicle]) 
         "Recommend top 1-3 vehicles with personalized reasoning and premium consultative tone.",
     )
     text = generate_text(NLG_SYSTEM, context)
-    return polish_response(text.strip()) if text else polish_response(_fallback_recommendations(state, vehicles))
+    return _accept_llm_reply(text, vehicles, _fallback_recommendations(state, vehicles))
 
 
 def generate_comparison(state: ConversationState, vehicles: list[Vehicle]) -> str:
@@ -261,7 +271,7 @@ def generate_comparison(state: ConversationState, vehicles: list[Vehicle]) -> st
         "Compare practical tradeoffs naturally: comfort, value, city-vs-highway, family fit.",
     )
     text = generate_text(NLG_SYSTEM, context)
-    return polish_response(text.strip()) if text else polish_response(_fallback_comparison(state, vehicles))
+    return _accept_llm_reply(text, vehicles, _fallback_comparison(state, vehicles))
 
 
 def generate_reserve_prompt(state: ConversationState, vehicle: Vehicle) -> str:
@@ -272,12 +282,11 @@ def generate_reserve_prompt(state: ConversationState, vehicle: Vehicle) -> str:
         "Use calm premium sales language; offer to hold the vehicle now and ask for email if needed.",
     )
     text = generate_text(NLG_SYSTEM, context)
-    if text:
-        return polish_response(text.strip())
-    return (
+    fallback = (
         f"This looks like your strongest fit so far. I can hold the {vehicle.year} {vehicle.make} "
         f"{vehicle.model} (#{vehicle.id}) for you now. What email should we send the confirmation to?"
     )
+    return _accept_llm_reply(text, [vehicle], fallback)
 
 
 def generate_purchase_prompt(state: ConversationState, vehicle: Vehicle | None) -> str:
@@ -288,7 +297,8 @@ def generate_purchase_prompt(state: ConversationState, vehicle: Vehicle | None) 
         "Ask for email to connect with sales.",
     )
     text = generate_text(NLG_SYSTEM, context)
-    return polish_response(text.strip()) if text else polish_response(_fallback_purchase_prompt(state, vehicle))
+    vehicles = [vehicle] if vehicle else []
+    return _accept_llm_reply(text, vehicles, _fallback_purchase_prompt(state, vehicle))
 
 
 def generate_welcome(state: ConversationState) -> str:

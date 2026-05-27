@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from enum import Enum
-
 from pydantic import BaseModel, Field
 
 from backend.config import get_settings
+from backend.database import Vehicle
+from backend.grounding import reply_prices_grounded
 from backend.intent import IntentKind
 
 
@@ -38,8 +39,9 @@ class ResponseLike(BaseModel):
     intent: IntentKind
     policy_context_used: bool = False
     blocked: bool = False
-    reserved_vehicle: object | None = None
+    reserved_vehicle: Vehicle | None = None
     email_sent: bool = False
+    vehicles: list[Vehicle] = Field(default_factory=list)
 
 
 def _score(reply: str) -> tuple[int, int]:
@@ -97,6 +99,23 @@ def validate_response_quality(response: ResponseLike) -> ValidationReport:
             )
         )
         risks += 1
+
+    grounding_vehicles: list[Vehicle] = list(response.vehicles)
+    if response.reserved_vehicle is not None and response.reserved_vehicle not in grounding_vehicles:
+        grounding_vehicles.append(response.reserved_vehicle)
+    if grounding_vehicles and not reply_prices_grounded(
+        response.reply,
+        grounding_vehicles,
+        reserved_vehicle=response.reserved_vehicle,
+    ):
+        findings.append(
+            ValidationFinding(
+                finding="Prices in reply are not grounded in vehicle facts",
+                severity=FindingSeverity.BLOCKER,
+                fix="Regenerate with template fallback or restrict to known prices",
+            )
+        )
+        blockers += 1
 
     calibrate_threshold = 3
     if profile == "strict":

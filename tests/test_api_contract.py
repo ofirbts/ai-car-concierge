@@ -1,12 +1,14 @@
 from unittest.mock import patch
 
+from backend.version import APP_VERSION
+
 
 def test_root_lists_entrypoints(api_client):
     response = api_client.get("/")
     assert response.status_code == 200
     data = response.json()
     assert data["docs"] == "/docs"
-    assert data["version"] == "1.2.0"
+    assert data["version"] == APP_VERSION
     assert data["openapi"] == "/openapi.json"
     assert data["features"]["conversational_sales"] is True
     assert "chat" in data
