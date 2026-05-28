@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import difflib
+import logging
 import re
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 from backend.conversation_state import ConversationState, DialoguePhase, save_conversation_state
 from backend.conversation_understanding import (
@@ -99,6 +102,7 @@ class SalesTurnResult:
     delegate: str | None = None
     vehicle_id: int | None = None
     show_vehicle_cards: bool = True
+    search_explanation: dict | None = None
 
 
 def has_sales_signal(message: str) -> bool:
@@ -256,8 +260,7 @@ def update_state_from_message(
     extracted: ExtractedIntent,
     user_email: str | None,
 ) -> ConversationState:
-    from backend.conversation_understanding import _regex_understand
-    understanding = _regex_understand(message)
+    understanding = understand_conversation(message, state)
     return _update_state_from_understanding(state, understanding, message, extracted, user_email)
 
 
@@ -275,6 +278,8 @@ def _update_state_from_understanding(
             state.family_size = slots.passengers
         if slots.budget is not None:
             state.budget = slots.budget
+        if slots.budget_unconstrained:
+            state.budget_unconstrained = True
         if slots.use_case is not None:
             state.use_case = slots.use_case
         if slots.city_vs_highway is not None:
@@ -285,12 +290,19 @@ def _update_state_from_understanding(
             state.body_type = slots.body_type
         if slots.fuel_preference is not None:
             state.fuel_preference = slots.fuel_preference
+        if slots.comfort_vs_efficiency == "efficiency":
+            state.comfort_vs_efficiency = "efficiency"
+            state.space_priority = "fuel"
+
+    if state.use_case and "family" in state.use_case.lower() and state.passengers == 1:
+        state.passengers = 4
+        state.family_size = 4
 
     if state.passengers is not None and state.body_type is None:
         if state.passengers >= 4:
             state.body_type = "suv"
 
-    if extracted.price_max and state.budget is None:
+    if extracted.price_max and state.budget is None and not state.budget_unconstrained:
         state.budget = extracted.price_max
 
     email = extract_email(message, user_email)
@@ -369,20 +381,57 @@ def _handle_preference_refinement(
     state: ConversationState,
     message: str,
 ) -> SalesTurnResult | None:
+    if not state.last_recommended_ids and not _matches_any(message, FUEL_SIGNALS):
+        return None
+    if not state.last_recommended_ids and not state.has_discovery_basics():
+        return None
+    if _matches_any(message, FUEL_SIGNALS):
+        state.space_priority = "fuel"
+        state.comfort_vs_efficiency = "efficiency"
+        retrieval = hybrid_search_inventory(
+            message.strip() or "efficient hybrid electric low fuel",
+            state=state,
+            limit=3,
+        )
+        vehicles = retrieval.vehicles
+        if not vehicles:
+            return None
+        state.last_recommended_ids = [v.id for v in vehicles]
+        state.shortlist_ids = list(dict.fromkeys(state.shortlist_ids + state.last_recommended_ids))
+        state.last_refinement_key = None
+        state.phase = DialoguePhase.RECOMMENDING
+        reply = generate_recommendations(state, vehicles)
+        reply = _guard_repetition_and_progress(state, reply)
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=vehicles,
+            intent=IntentKind.INVENTORY_SEARCH,
+            phase=state.phase,
+            rag_mode=f"sales_dialogue+efficiency_refine+{retrieval.retrieval_mode}",
+            show_vehicle_cards=True,
+        )
     if not state.last_recommended_ids:
         return None
     if not (
-        _matches_any(message, SPACE_SIGNALS + FUEL_SIGNALS)
-        or state.space_priority
+        _matches_any(message, SPACE_SIGNALS)
+        or state.space_priority == "space"
         or state.fuel_preference
     ):
         return None
     vehicles = _vehicles_from_ids(state.last_recommended_ids[:4])
     if not vehicles:
         return None
+    from backend.inventory_retrieval import _efficiency_fit_score
+
     ranked = sorted(
         vehicles,
-        key=lambda v: (family_fit_score(v, state), -v.price),
+        key=lambda v: (
+            family_fit_score(v, state),
+            _efficiency_fit_score(v, state),
+            -v.price,
+        ),
         reverse=True,
     )
     best = ranked[0]
@@ -433,20 +482,29 @@ def handle_sales_turn(
     state.add_history_turn("user", message)
 
     understanding = understand_conversation(message, state)
+    logger.info(
+        "conv_metrics session=%s turn=%d intent=%s lang=%s phase=%s slots_filled=%s",
+        state.session_id,
+        state.turn_count,
+        understanding.conv_intent.value,
+        understanding.language,
+        state.phase.value,
+        list(state.filled_slots().keys()),
+    )
 
     _update_state_from_understanding(state, understanding, message, extracted, user_email)
 
     import re as _re
     _explicit_lang_switch = bool(
-        _re.search(r"\b(hebrew|עברית|דבר עברית|תדבר עברית|answer in hebrew|speak hebrew)\b", message.lower())
-        or _re.search(r"\b(english|speak english|answer in english|דבר אנגלית|תדבר אנגלית)\b", message.lower())
+        _re.search(r"hebrew|בעברית|עברית|דבר עברית|תדבר עברית|answer in hebrew|speak hebrew", message.lower())
+        or _re.search(r"\b(english|speak english|answer in english)\b|דבר אנגלית|תדבר אנגלית|באנגלית", message.lower())
     )
     language_just_switched = _explicit_lang_switch and (
         (understanding.language == "he" and state.language_preference != "he")
         or (understanding.language == "en" and state.language_preference == "he")
     )
 
-    policy = decide_policy(state, understanding)
+    policy = decide_policy(state, understanding, message)
 
     lang = policy.language
 
@@ -543,7 +601,20 @@ def handle_sales_turn(
         )
 
     if policy.action == PolicyAction.REPAIR_TURN:
-        reply = generate_repair_turn_response(state)
+        if policy.question_hint == "misunderstood_slot":
+            if state.last_asked_field == "passengers":
+                state.budget = None
+            if state.language_preference == "he":
+                if state.last_asked_field == "passengers":
+                    reply = "צודק — פירשתי את זה בטעות כתקציב. כמה אנשים בדרך כלל נוסעים איתך?"
+                else:
+                    reply = "צודק — לא הבנתי נכון. אפשר לנסח שוב בקצרה?"
+            elif state.last_asked_field == "passengers":
+                reply = "You're right — I misread that as a budget. How many people usually ride along?"
+            else:
+                reply = "You're right — I misread that. Could you say that again in a few words?"
+        else:
+            reply = generate_repair_turn_response(state)
         reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.REPAIR_TURN
         state.last_refinement_key = None
@@ -757,6 +828,7 @@ def handle_sales_turn(
             reply = generate_ask_passengers(state)
         reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.DISCOVERY
+        state.last_asked_field = "passengers"
         state.add_history_turn("assistant", reply, "ask_passengers")
         save_conversation_state(state)
         return SalesTurnResult(
@@ -773,6 +845,7 @@ def handle_sales_turn(
         reply = generate_ask_use_case(state)
         reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.DISCOVERY
+        state.last_asked_field = "use_case"
         state.add_history_turn("assistant", reply, "ask_use_case")
         save_conversation_state(state)
         return SalesTurnResult(
@@ -789,6 +862,7 @@ def handle_sales_turn(
         reply = generate_ask_city_vs_highway(state)
         reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.DISCOVERY
+        state.last_asked_field = "city_vs_highway"
         state.add_history_turn("assistant", reply, "ask_city_vs_highway")
         save_conversation_state(state)
         return SalesTurnResult(
@@ -805,6 +879,7 @@ def handle_sales_turn(
         reply = generate_ask_budget(state)
         reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.DISCOVERY
+        state.last_asked_field = "budget"
         state.add_history_turn("assistant", reply, "ask_budget")
         save_conversation_state(state)
         return SalesTurnResult(
@@ -852,6 +927,19 @@ def handle_sales_turn(
     reply = _guard_repetition_and_progress(state, reply)
     state.add_history_turn("assistant", reply, "recommendation")
     save_conversation_state(state)
+    search_explanation = {
+        "applied_filters": retrieval.applied_filters,
+        "excluded": [e.model_dump() for e in retrieval.excluded_vehicles],
+    }
+    logger.info(
+        "conv_metrics session=%s phase=%s lang=%s turn=%d vehicles=%s filters=%s",
+        state.session_id,
+        state.phase.value,
+        state.language_preference,
+        state.turn_count,
+        [v.id for v in vehicles],
+        retrieval.applied_filters,
+    )
     return SalesTurnResult(
         reply=reply,
         state=state,
@@ -859,4 +947,5 @@ def handle_sales_turn(
         intent=IntentKind.INVENTORY_SEARCH,
         phase=state.phase,
         rag_mode=f"sales_dialogue+{retrieval.retrieval_mode}",
+        search_explanation=search_explanation,
     )

@@ -297,6 +297,36 @@ def _render_hero() -> None:
     )
 
 
+def _render_search_explanation() -> None:
+    filters = st.session_state.get("_last_search_filters", {})
+    excluded = st.session_state.get("_last_excluded", [])
+    if not filters and not excluded:
+        return
+    with st.expander("Why these vehicles?", expanded=False):
+        if filters:
+            filter_parts = []
+            if "budget_max" in filters:
+                filter_parts.append(f"Budget ≤ ${filters['budget_max']:,.0f}")
+            if "passengers_min" in filters:
+                filter_parts.append(f"Seats ≥ {filters['passengers_min']}")
+            if "fuel_type" in filters:
+                filter_parts.append(f"Fuel: {filters['fuel_type']}")
+            if "make" in filters:
+                filter_parts.append(f"Make: {filters['make']}")
+            if filter_parts:
+                st.caption("**Applied:** " + " · ".join(filter_parts))
+        for row in excluded[:5]:
+            reason_label = {
+                "above_budget": "above budget",
+                "low_efficiency_for_priority": "low fuel efficiency",
+                "poor_family_fit": "poor family fit",
+                "lower_relevance": "lower match score",
+            }.get(row.get("reason", ""), row.get("reason", ""))
+            st.caption(
+                f"↳ #{row['vehicle_id']} {row.get('year','')} {row.get('make','')} {row.get('model','')} — excluded: {reason_label}"
+            )
+
+
 def _render_vehicle_cards(vehicles: list[dict], *, title: str = "Recommended vehicles") -> None:
     if not vehicles:
         return
@@ -375,6 +405,10 @@ if "shortlist_vehicles" not in st.session_state:
     st.session_state.shortlist_vehicles = []
 if "dialogue_phase" not in st.session_state:
     st.session_state.dialogue_phase = None
+if "_last_search_filters" not in st.session_state:
+    st.session_state._last_search_filters = {}
+if "_last_excluded" not in st.session_state:
+    st.session_state._last_excluded = []
 
 with st.sidebar:
     st.subheader("Your details")
@@ -450,6 +484,8 @@ with chat_col:
         if should_show_vehicle_cards(st.session_state.messages, idx, message):
             title = vehicle_card_title(message)
             _render_vehicle_cards(message["vehicles"], title=title)
+            if idx == len(st.session_state.messages) - 1:
+                _render_search_explanation()
 
     if prompt := st.chat_input("Tell me what you need — budget, family size, preferences…"):
         st.session_state.messages.append({"role": "user", "content": prompt, "blocked": False})
@@ -498,6 +534,12 @@ with chat_col:
                     st.session_state.shortlist_vehicles = vehicles
                 show_cards = data.get("show_vehicle_cards", True)
                 reserved_flag = bool(data.get("reserved_vehicle"))
+                if data.get("search_explanation") and vehicles:
+                    ex = data["search_explanation"]
+                    af = ex.get("applied_filters", {})
+                    if af:
+                        st.session_state._last_search_filters = af
+                    st.session_state._last_excluded = ex.get("excluded", [])
                 if settings.show_debug_meta:
                     meta = []
                     if data.get("dialogue_phase"):

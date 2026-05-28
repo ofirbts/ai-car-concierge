@@ -5,7 +5,11 @@ from enum import Enum
 from pydantic import BaseModel
 
 from backend.conversation_state import ConversationState
-from backend.conversation_understanding import ConvIntent, ConversationUnderstanding
+from backend.conversation_understanding import (
+    ConvIntent,
+    ConversationUnderstanding,
+    _is_budget_context,
+)
 
 
 class PolicyAction(str, Enum):
@@ -37,9 +41,28 @@ class PolicyDecision(BaseModel):
     reasoning: str = ""
 
 
+def _should_clarify_budget(
+    state: ConversationState,
+    understanding: ConversationUnderstanding,
+    message: str,
+) -> bool:
+    b = understanding.slots.budget
+    if b is None:
+        return False
+    if state.last_asked_field == "passengers":
+        return False
+    if understanding.slots.passengers is not None and state.last_asked_field == "passengers":
+        return False
+    if state.last_asked_field == "budget":
+        return True
+    if _is_budget_context(message, state):
+        return True
+    return b >= 10_000
+
+
 def _has_enough_context_to_recommend(state: ConversationState) -> bool:
     has_passengers = state.passengers is not None or state.family_size is not None
-    has_budget = state.budget is not None
+    has_budget = state.budget is not None or getattr(state, "budget_unconstrained", False)
     has_preference = bool(
         state.use_case
         or state.body_type
@@ -52,6 +75,7 @@ def _has_enough_context_to_recommend(state: ConversationState) -> bool:
 def decide_policy(
     state: ConversationState,
     understanding: ConversationUnderstanding,
+    message: str = "",
 ) -> PolicyDecision:
     lang = understanding.language if understanding.language else state.language_preference
 
@@ -92,7 +116,15 @@ def decide_policy(
             reasoning="User is asking about buying criteria — explain dimensions, do NOT recommend yet",
         )
 
-    if intent == ConvIntent.FRUSTRATION:
+    if intent == ConvIntent.USER_CORRECTION:
+        return PolicyDecision(
+            action=PolicyAction.REPAIR_TURN,
+            language=lang,
+            question_hint="misunderstood_slot",
+            reasoning="User correcting a misread answer",
+        )
+
+    if intent in (ConvIntent.NEGATIVE_FEEDBACK, ConvIntent.FRUSTRATION):
         state.frustration_level = min(state.frustration_level + 1, 3)
         return PolicyDecision(
             action=PolicyAction.REPAIR_TURN,
@@ -100,9 +132,11 @@ def decide_policy(
             reasoning="User expressed frustration, acknowledge and recalibrate",
         )
 
-    if understanding.slots.budget is not None:
+    if understanding.slots.budget is not None and _should_clarify_budget(
+        state, understanding, message
+    ):
         b = understanding.slots.budget
-        if b < 5000:
+        if b is not None and b < 5000:
             return PolicyDecision(
                 action=PolicyAction.CLARIFY_BUDGET,
                 language=lang,

@@ -86,6 +86,7 @@ class ChatResponse(BaseModel):
     dialogue_phase: DialoguePhase | None = None
     conversation_progress: dict[str, object] = Field(default_factory=dict)
     show_vehicle_cards: bool = True
+    search_explanation: dict | None = None
 
     def model_post_init(self, __context: object) -> None:
         report = validate_response_quality(
@@ -368,6 +369,7 @@ def _sales_chat_response(
         dialogue_phase=turn.phase,
         conversation_progress=turn.state.filled_slots(),
         show_vehicle_cards=turn.show_vehicle_cards,
+        search_explanation=turn.search_explanation,
     )
 
 

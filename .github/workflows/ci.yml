@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [master, main]
   workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -26,8 +28,26 @@ jobs:
       - run: pip install -r requirements.txt
       - run: pip install pip-audit && pip-audit -r requirements.txt
       - run: pytest -q --ignore=tests/test_production_smoke.py -m "not live"
+      - run: pytest -q tests/test_conversation_golden.py
       - run: pytest -q tests/test_production_smoke.py::test_production_ready
       - run: pytest -q tests/test_production_smoke.py::test_production_chat_requires_key
+
+  nightly-live:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest -q -m live tests/
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
 
   smoke-prod:
     if: |

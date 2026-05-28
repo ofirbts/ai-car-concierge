@@ -103,6 +103,43 @@ def test_production_api_version_and_conversational_sales(production_key):
     assert data.get("intent") == "general_chat"
 
 
+def test_production_hebrew_switch(production_key):
+    headers = {"X-API-Key": production_key}
+    r1 = httpx.post(
+        f"{PRODUCTION_URL}/api/chat",
+        json={"message": "family car 4 people budget 75000 family trips"},
+        headers=headers,
+        timeout=90.0,
+    )
+    assert r1.status_code == 200, r1.text[:300]
+    sid = r1.json().get("session_id")
+    assert sid, "First turn must return a session_id"
+
+    r2 = httpx.post(
+        f"{PRODUCTION_URL}/api/chat",
+        json={"message": "תענה לי בעברית", "session_id": sid},
+        headers=headers,
+        timeout=90.0,
+    )
+    assert r2.status_code == 200, r2.text[:300]
+    reply2 = r2.json().get("reply", "")
+    assert any("\u0590" <= c <= "\u05FF" for c in reply2), (
+        f"Expected Hebrew chars in reply after language switch, got: {reply2!r}"
+    )
+
+    r3 = httpx.post(
+        f"{PRODUCTION_URL}/api/chat",
+        json={"message": "bad idea samshing else", "session_id": sid},
+        headers=headers,
+        timeout=90.0,
+    )
+    assert r3.status_code == 200, r3.text[:300]
+    d3 = r3.json()
+    assert d3.get("show_vehicle_cards") is False or d3.get("vehicles") == [], (
+        f"'samshing else' should not return a full recommendation pitch: {d3.get('reply','')[:200]}"
+    )
+
+
 def test_production_reserve_decrements_stock(production_key):
     if os.environ.get("RUN_MUTATING_PRODUCTION_SMOKE") != "true":
         pytest.skip("Set RUN_MUTATING_PRODUCTION_SMOKE=true for reserve stock mutation test")

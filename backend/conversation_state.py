@@ -54,6 +54,8 @@ class ConversationState(BaseModel):
     budget_sensitivity: str | None = None
     rejected_constraints: list[str] = Field(default_factory=list)
     conversation_history: list[dict] = Field(default_factory=list)
+    last_asked_field: str | None = None
+    budget_unconstrained: bool = False
 
     def filled_slots(self) -> dict[str, object]:
         out: dict[str, object] = {}
@@ -89,7 +91,7 @@ class ConversationState(BaseModel):
 
     def has_discovery_basics(self) -> bool:
         passenger_info = self.passengers is not None or self.family_size is not None
-        budget_info = self.budget is not None
+        budget_info = self.budget is not None or self.budget_unconstrained
         preference_info = bool(
             self.use_case
             or self.body_type

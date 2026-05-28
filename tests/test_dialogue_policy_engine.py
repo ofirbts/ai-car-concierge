@@ -92,6 +92,7 @@ def test_confused_prompt_returns_product_explanation(isolated_db):
 
 def test_invalid_budget_short_input_triggers_clarification(isolated_db):
     state = ConversationState(session_id="d4c")
+    state.last_asked_field = "budget"
     extracted = classify_intent_rule_based("200")
     turn = handle_sales_turn(
         "200",

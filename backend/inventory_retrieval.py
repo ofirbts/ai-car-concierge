@@ -100,11 +100,21 @@ NATURAL_QUERY_HINTS: tuple[tuple[str, str], ...] = (
 )
 
 
+class ExcludedVehicle(BaseModel):
+    vehicle_id: int
+    make: str
+    model: str
+    year: int
+    reason: str
+
+
 class InventoryRetrievalResult(BaseModel):
     vehicles: list[Vehicle] = Field(default_factory=list)
     retrieval_mode: str = "sql"
     matched_profiles: list[str] = Field(default_factory=list)
     query: str = ""
+    applied_filters: dict = Field(default_factory=dict)
+    excluded_vehicles: list[ExcludedVehicle] = Field(default_factory=list)
 
 
 def infer_body_type(vehicle: Vehicle) -> str:
@@ -266,6 +276,41 @@ def family_fit_score(vehicle: Vehicle, state: ConversationState | None) -> float
     return score
 
 
+def _efficiency_fit_score(vehicle: Vehicle, state: ConversationState | None) -> float:
+    if not state:
+        return 0.0
+    fuel = vehicle.fuel_type.lower() if vehicle.fuel_type else ""
+    space_priority = getattr(state, "space_priority", None)
+    fuel_pref = getattr(state, "fuel_preference", None)
+    comfort_vs_eff = getattr(state, "comfort_vs_efficiency", None)
+
+    wants_efficiency = (
+        space_priority == "fuel"
+        or (fuel_pref and fuel_pref.lower() in ("electric", "hybrid", "plug-in hybrid"))
+        or (comfort_vs_eff == "efficiency")
+        or (state.use_case and "city" in (state.use_case or "").lower())
+    )
+
+    if not wants_efficiency:
+        return 0.0
+
+    if "electric" in fuel:
+        return 3.0
+    if "plug-in hybrid" in fuel or "phev" in fuel:
+        return 2.0
+    if "hybrid" in fuel:
+        return 1.5
+    if "gasoline" in fuel or "gas" in fuel:
+        model_lower = vehicle.model.lower()
+        make_lower = vehicle.make.lower()
+        large_gas_suvs = {"escalade", "navigator", "expedition", "tahoe", "yukon", "armada", "sequoia"}
+        if any(name in model_lower for name in large_gas_suvs):
+            return -3.0
+        if vehicle.make.lower() in ("cadillac", "lincoln") and "gasoline" in fuel:
+            return -1.5
+    return 0.0
+
+
 def body_type_filter(vehicles: list[Vehicle], body_type: str | None) -> list[Vehicle]:
     if not body_type:
         return vehicles
@@ -349,7 +394,8 @@ def hybrid_search_inventory(
                 semantic = _cosine_similarity(query_vec, vec)
                 profile_score = _profile_filter_score(vehicle, profiles) * 0.15
                 family_score = family_fit_score(vehicle, state) * 0.12
-                ranked.append((semantic + profile_score + family_score, vehicle))
+                efficiency_score = _efficiency_fit_score(vehicle, state) * 0.15
+                ranked.append((semantic + profile_score + family_score + efficiency_score, vehicle))
         else:
             use_embeddings = False
 
@@ -358,15 +404,49 @@ def hybrid_search_inventory(
             score = _keyword_score(query_text, vehicle)
             score += _profile_filter_score(vehicle, profiles) * 0.2
             score += family_fit_score(vehicle, state)
+            score += _efficiency_fit_score(vehicle, state)
             if state and state.budget and vehicle.price <= state.budget:
                 score += 1.0
             ranked.append((score, vehicle))
 
     ranked.sort(key=lambda item: (-item[0], item[1].price))
     top = [v for _, v in ranked[:limit]]
+    top_ids = {v.id for v in top}
+
+    applied: dict = {}
+    if base_filters.price_max is not None:
+        applied["budget_max"] = base_filters.price_max
+    if base_filters.fuel_type:
+        applied["fuel_type"] = base_filters.fuel_type
+    if base_filters.make:
+        applied["make"] = base_filters.make
+    if state and state.passengers:
+        applied["passengers_min"] = state.passengers
+
+    excluded: list[ExcludedVehicle] = []
+    for _score, vehicle in ranked[limit : limit + 5]:
+        if vehicle.id in top_ids:
+            continue
+        reason = "lower_relevance"
+        if state and state.budget and vehicle.price > state.budget:
+            reason = "above_budget"
+        elif _efficiency_fit_score(vehicle, state) <= -2.0:
+            reason = "low_efficiency_for_priority"
+        elif family_fit_score(vehicle, state) < -1.0:
+            reason = "poor_family_fit"
+        excluded.append(ExcludedVehicle(
+            vehicle_id=vehicle.id,
+            make=vehicle.make,
+            model=vehicle.model,
+            year=vehicle.year,
+            reason=reason,
+        ))
+
     return InventoryRetrievalResult(
         vehicles=top,
         retrieval_mode=mode,
         matched_profiles=profiles,
         query=query_text,
+        applied_filters=applied,
+        excluded_vehicles=excluded,
     )
