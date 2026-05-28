@@ -40,6 +40,7 @@ def test_topic_shift_recalibrates_without_recommendation_cards(isolated_db):
     assert turn.intent.value == "general_chat"
     assert turn.show_vehicle_cards is False
     assert "optimize" in turn.reply.lower() or "what should" in turn.reply.lower()
+    assert state.last_recommended_ids == []
 
 
 def test_language_switch_to_hebrew(isolated_db):
@@ -55,3 +56,24 @@ def test_language_switch_to_hebrew(isolated_db):
     assert state.language_preference == "he"
     assert turn.show_vehicle_cards is False
     assert "בעברית" in turn.reply
+
+
+def test_unclear_followup_triggers_clarify_constraints(isolated_db):
+    state = ConversationState(session_id="d5")
+    state.turn_count = 5
+    state.passengers = 4
+    state.budget = 75000
+    state.use_case = "family trips"
+    state.body_type = "suv"
+    state.last_recommended_ids = [55, 77, 69]
+    extracted = classify_intent_rule_based("no")
+    turn = handle_sales_turn(
+        "no",
+        extracted,
+        state,
+        None,
+        PolicyRAGService(use_embeddings=False),
+    )
+    assert turn.intent.value == "general_chat"
+    assert turn.show_vehicle_cards is False
+    assert "what should i change first" in turn.reply.lower()

@@ -230,6 +230,13 @@ def update_state_from_message(
     extracted: ExtractedIntent,
     user_email: str | None,
 ) -> ConversationState:
+    if _is_topic_reset_request(message):
+        state.use_case = None
+        state.body_type = None
+        state.space_priority = None
+        state.last_refinement_key = None
+        state.last_recommended_ids = []
+
     passengers = _parse_passengers(message)
     if passengers is not None:
         state.passengers = passengers
@@ -330,6 +337,16 @@ def _wants_new_search(message: str) -> bool:
     )
 
 
+def _is_topic_reset_request(message: str) -> bool:
+    lower = message.lower()
+    return bool(
+        re.search(
+            r"\b(something else|another direction|different direction|not family|without family)\b|משהו אחר|בלי טיולים משפחתיים",
+            lower,
+        )
+    )
+
+
 def _is_smalltalk(message: str) -> bool:
     lower = message.lower().strip()
     return bool(
@@ -356,6 +373,21 @@ def _is_preference_refinement(message: str, state: ConversationState) -> bool:
         or _parse_fuel(message)
         or _parse_body_type(message)
     )
+
+
+def _is_unclear_followup(message: str, state: ConversationState) -> bool:
+    if not state.last_recommended_ids:
+        return False
+    lower = message.lower().strip()
+    if len(lower) > 28:
+        return False
+    if _matches_any(message, COMPARE_SIGNALS + RESERVE_SIGNALS + PURCHASE_SIGNALS):
+        return False
+    if _is_budget_objection(message) or _wants_new_search(message):
+        return False
+    if _parse_use_case(message) or _parse_fuel(message) or _parse_body_type(message):
+        return False
+    return bool(re.search(r"\b(no|nah|not this|other|else)\b|לא|אחר", lower))
 
 
 def _is_budget_objection(message: str) -> bool:
@@ -566,6 +598,7 @@ def handle_sales_turn(
     if policy.action in {"repair_turn", "topic_shift_recalibrate"}:
         state.phase = DialoguePhase.DISCOVERY
         state.last_refinement_key = None
+        state.last_recommended_ids = []
         save_conversation_state(state)
         follow_up = policy.question or "What matters most in your decision right now?"
         if state.language_preference == "he":
@@ -577,6 +610,19 @@ def handle_sales_turn(
             intent=IntentKind.GENERAL_CHAT,
             phase=state.phase,
             rag_mode="sales_dialogue+repair_turn",
+            show_vehicle_cards=False,
+        )
+
+    if _is_unclear_followup(message, state):
+        state.phase = DialoguePhase.DISCOVERY
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply="Understood. What should I change first — price, size, fuel efficiency, or body style?",
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+clarify_constraints",
             show_vehicle_cards=False,
         )
 

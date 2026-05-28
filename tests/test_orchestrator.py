@@ -2,7 +2,7 @@ import pytest
 
 from backend.database import PolicyViolationError, assert_sellable, get_vehicle_by_id, reserve_vehicle
 from backend.intent import IntentKind, classify_intent_rule_based
-from backend.orchestrator import ChatRequest, handle_chat
+from backend.orchestrator import ChatRequest, _governor_run_id, handle_chat
 from backend.rag_service import PolicyRAGService
 
 
@@ -39,3 +39,16 @@ def test_handle_chat_notes_delisted_inventory(isolated_db):
     assert response.blocked is True
     assert any(v.pending_delisting for v in response.vehicles)
     assert "De-listing" in response.reply or "2022" in response.reply
+
+
+def test_governor_run_id_scopes_by_request_when_no_idempotency():
+    req = ChatRequest(message="same", user_email="a@example.com", session_id="sess-1")
+    first = _governor_run_id(req)
+    second = _governor_run_id(req)
+    assert first != second
+    assert first.startswith("chat:req:sess-1:")
+
+
+def test_governor_run_id_uses_idempotency_when_present():
+    req = ChatRequest(message="same", idempotency_key="abc-123", session_id="sess-1")
+    assert _governor_run_id(req) == "chat:abc-123"

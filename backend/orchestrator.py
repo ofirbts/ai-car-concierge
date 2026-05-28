@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+import uuid
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -134,13 +135,8 @@ def log_chat_outcome(response: ChatResponse) -> None:
 def _governor_run_id(request: ChatRequest) -> str:
     if request.idempotency_key:
         return f"chat:{request.idempotency_key}"
-    return stable_idempotency_key(
-        "chat_request",
-        {
-            "message": request.message,
-            "user_email": str(request.user_email or ""),
-        },
-    )
+    session_scope = request.session_id or "anon"
+    return f"chat:req:{session_scope}:{uuid.uuid4()}"
 
 
 def _load_or_classify(request: ChatRequest) -> tuple[str, ExtractedIntent]:
