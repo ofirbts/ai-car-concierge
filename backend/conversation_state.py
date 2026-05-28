@@ -40,6 +40,7 @@ class ConversationState(BaseModel):
     language_preference: str = "en"
     last_assistant_reply: str | None = None
     repetition_count: int = 0
+    stall_turns: int = 0
 
     def filled_slots(self) -> dict[str, object]:
         out: dict[str, object] = {}

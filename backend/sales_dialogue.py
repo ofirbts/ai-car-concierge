@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass
 
@@ -67,6 +68,14 @@ COMPARE_SIGNALS = (
 )
 SPACE_SIGNALS = (r"\bspace\b", r"\broomy\b", r"\bspacious\b", r"\bמרווח\b")
 FUEL_SIGNALS = (r"\bfuel\b", r"\bgas\b", r"\belectric\b", r"\bhybrid\b", r"\bחיסכון\b", r"\bדלק\b")
+
+DIALOGUE_CONTRACT = {
+    "min_discovery_turns_before_full_reco": 2,
+    "force_clarify_on_objection": True,
+    "force_language_lock": True,
+    "max_similar_replies_in_row": 1,
+    "force_progress_after_stall_turns": 2,
+}
 
 
 @dataclass
@@ -390,6 +399,36 @@ def _is_unclear_followup(message: str, state: ConversationState) -> bool:
     return bool(re.search(r"\b(no|nah|not this|other|else)\b|לא|אחר", lower))
 
 
+def _explicit_fast_options_request(message: str) -> bool:
+    lower = message.lower()
+    return bool(
+        re.search(r"\b(show me options now|just show options|skip questions|just recommend)\b|תראה אופציות עכשיו", lower)
+    )
+
+
+def _too_similar(a: str, b: str) -> bool:
+    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio() >= 0.82
+
+
+def _guard_repetition_and_progress(state: ConversationState, reply: str) -> str:
+    previous = state.last_assistant_reply or ""
+    if previous and _too_similar(reply, previous):
+        state.repetition_count += 1
+    else:
+        state.repetition_count = 0
+    state.last_assistant_reply = reply
+    if state.repetition_count >= DIALOGUE_CONTRACT["max_similar_replies_in_row"]:
+        state.stall_turns += 1
+    else:
+        state.stall_turns = 0
+    if state.stall_turns >= DIALOGUE_CONTRACT["force_progress_after_stall_turns"]:
+        state.stall_turns = 0
+        if state.language_preference == "he":
+            return "נעצור רגע ונדייק. מה הכי חשוב עכשיו: מחיר, מרווח, נוחות או חסכון בדלק?"
+        return "Let's recalibrate quickly. What matters most now: price, space, comfort, or efficiency?"
+    return reply
+
+
 def _is_budget_objection(message: str) -> bool:
     lower = message.lower()
     return bool(
@@ -446,6 +485,7 @@ def _handle_budget_objection(
             reply += f" Also worth a look: {alts}."
         reply += f" Want a compare, or should I hold #{best.id}?"
         show_cards = True
+    reply = _guard_repetition_and_progress(state, reply)
     state.phase = DialoguePhase.RECOMMENDING
     save_conversation_state(state)
     return SalesTurnResult(
@@ -518,6 +558,7 @@ def _handle_preference_refinement(
             f"{best.year} {best.make} {best.model} (#{best.id}). "
             f"We can compare ({ids_hint}) quickly, or I can reserve #{best.id} now."
         )
+    reply = _guard_repetition_and_progress(state, reply)
     state.last_refinement_key = refine_key
     state.phase = DialoguePhase.RECOMMENDING
     save_conversation_state(state)
@@ -583,11 +624,13 @@ def handle_sales_turn(
         )
     if policy.action == "smalltalk_repair":
         state.phase = DialoguePhase.RECOMMENDING if state.last_recommended_ids else DialoguePhase.DISCOVERY
+        reply = (
+            "I'm your AI car advisor. If you want, I can recalibrate now based on what matters most to you."
+        )
+        reply = _guard_repetition_and_progress(state, reply)
         save_conversation_state(state)
         return SalesTurnResult(
-            reply=(
-                "I'm your AI car advisor. If you want, I can recalibrate now based on what matters most to you."
-            ),
+            reply=reply,
             state=state,
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
@@ -603,6 +646,7 @@ def handle_sales_turn(
         follow_up = policy.question or "What matters most in your decision right now?"
         if state.language_preference == "he":
             follow_up = "הבנתי. מה היה פחות מדויק — מחיר, גודל, נוחות או צריכת דלק?"
+        follow_up = _guard_repetition_and_progress(state, follow_up)
         return SalesTurnResult(
             reply=follow_up,
             state=state,
@@ -615,9 +659,11 @@ def handle_sales_turn(
 
     if _is_unclear_followup(message, state):
         state.phase = DialoguePhase.DISCOVERY
+        reply = "Understood. What should I change first — price, size, fuel efficiency, or body style?"
+        reply = _guard_repetition_and_progress(state, reply)
         save_conversation_state(state)
         return SalesTurnResult(
-            reply="Understood. What should I change first — price, size, fuel efficiency, or body style?",
+            reply=reply,
             state=state,
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
@@ -736,6 +782,7 @@ def handle_sales_turn(
                 rag_mode="sales_dialogue",
             )
         reply = generate_comparison(state, vehicles)
+        reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.COMPARING
         state.compare_vehicle_ids = [v.id for v in vehicles]
         save_conversation_state(state)
@@ -754,6 +801,12 @@ def handle_sales_turn(
         return refinement
 
     question = _next_discovery_question(state)
+    if (
+        question is None
+        and state.turn_count < DIALOGUE_CONTRACT["min_discovery_turns_before_full_reco"]
+        and not _explicit_fast_options_request(message)
+    ):
+        question = "Before I shortlist, do you drive mostly in the city or on longer highway trips?"
     if question and not state.has_discovery_basics():
         reply = generate_clarifying_question(state, _contextual_discovery_question(state, question))
         state.phase = DialoguePhase.DISCOVERY
@@ -774,6 +827,7 @@ def handle_sales_turn(
     state.shortlist_ids = list(dict.fromkeys(state.shortlist_ids + state.last_recommended_ids))
     state.phase = DialoguePhase.RECOMMENDING
     reply = generate_recommendations(state, vehicles)
+    reply = _guard_repetition_and_progress(state, reply)
     save_conversation_state(state)
     return SalesTurnResult(
         reply=reply,

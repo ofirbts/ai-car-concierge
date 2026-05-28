@@ -3,7 +3,7 @@ from backend.dialogue_analysis import analyze_dialogue_turn
 from backend.dialogue_policy import choose_dialogue_policy
 from backend.intent import classify_intent_rule_based
 from backend.rag_service import PolicyRAGService
-from backend.sales_dialogue import handle_sales_turn
+from backend.sales_dialogue import _too_similar, handle_sales_turn
 
 
 def test_dialogue_analysis_detects_smalltalk():
@@ -77,3 +77,9 @@ def test_unclear_followup_triggers_clarify_constraints(isolated_db):
     assert turn.intent.value == "general_chat"
     assert turn.show_vehicle_cards is False
     assert "what should i change first" in turn.reply.lower()
+
+
+def test_similarity_guard_detects_near_duplicates():
+    a = "My first pick is #55 because it has strong cabin space."
+    b = "My first pick is #55 because it has strong cabin space."
+    assert _too_similar(a, b) is True
