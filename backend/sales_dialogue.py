@@ -271,6 +271,13 @@ def _update_state_from_understanding(
     extracted: ExtractedIntent,
     user_email: str | None,
 ) -> ConversationState:
+    if state.last_asked_field == "use_case" and state.use_case is None:
+        msg_lower = message.strip().lower()
+        if msg_lower and not re.fullmatch(r"[\d\W]+", msg_lower):
+            raw_uc = message.strip()
+            if len(raw_uc) <= 60 and not re.search(r"\d{4,}", raw_uc):
+                state.use_case = raw_uc
+
     if understanding.slot_confidence >= 0.65:
         slots = understanding.slots
         if slots.passengers is not None:

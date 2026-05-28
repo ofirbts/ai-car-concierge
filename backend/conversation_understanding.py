@@ -188,6 +188,16 @@ def _extract_use_case(message: str) -> tuple[str | None, str | None]:
         use_case = "family_trips"
     elif re.search(r"\bwork\b|\bdaily\b|\bעבודה\b", lower):
         use_case = "daily_commute"
+    elif re.search(
+        r"קניות|שוק|ערים|עירוני|יומיומי|יום.יום|ריצות|נסיעות קצרות|"
+        r"shopping|errands|supermarket|grocery|local|short trips|around town|day.to.day",
+        lower,
+    ):
+        use_case = "city_driving"
+        city_vs_hw = "city"
+    elif re.search(r"רהיט|ריהוט|furniture|ikea|cargo|hauling|camping|outdoor|טבע|טיולים|road trip", lower):
+        use_case = "highway_travel"
+        city_vs_hw = "highway"
     return use_case, city_vs_hw
 
 
@@ -288,6 +298,26 @@ def _is_no_budget_constraint(lower: str) -> bool:
     )
 
 
+def _extract_suggested_budget_from_history(state: ConversationState) -> float | None:
+    for turn in reversed(state.conversation_history or []):
+        if turn.get("role") != "assistant":
+            continue
+        text = turn.get("message", "")
+        nums = re.findall(r"\$?\s*([\d,]+)\s*(?:k|K|אלף)?", text)
+        values: list[float] = []
+        for n in nums:
+            raw = re.sub(r"[^\d]", "", n)
+            if raw:
+                v = float(raw)
+                if "k" in text.lower() or "אלף" in text:
+                    v *= 1000
+                if 5000 <= v <= 500_000:
+                    values.append(v)
+        if values:
+            return sum(values) / len(values)
+    return None
+
+
 def _regex_understand(
     message: str,
     state: ConversationState | None = None,
@@ -295,6 +325,20 @@ def _regex_understand(
     lower = message.lower().strip()
     lang = _detect_language(message)
     empty_slots = UnderstandingSlots()
+
+    if (
+        state is not None
+        and state.last_asked_field == "budget"
+        and re.fullmatch(r"(yes|yeah|yep|sure|ok|okay|כן|בסדר|אוקי|נכון|בדיוק|ברור|אגדיל|כן בדיוק)\s*[!.]*", lower)
+    ):
+        suggested = _extract_suggested_budget_from_history(state)
+        if suggested is not None:
+            return ConversationUnderstanding(
+                conv_intent=ConvIntent.SLOT_ANSWER,
+                language=lang,
+                slots=UnderstandingSlots(budget=suggested),
+                slot_confidence=0.92,
+            )
 
     contextual = _contextual_numeric_answer(message, state)
     if contextual is not None:
