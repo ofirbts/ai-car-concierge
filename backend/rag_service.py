@@ -111,6 +111,18 @@ def _keyword_score(query: str, chunk: dict[str, str]) -> float:
     return overlap + heading_overlap * 1.5
 
 
+def _source_prior_boost(query: str, chunk: dict[str, str]) -> float:
+    q = query.lower()
+    source = chunk.get("source", "").lower()
+    if ("refund" in q or "deposit" in q) and source == "faqs.md":
+        return 0.35
+    if ("shipping" in q or "delivery" in q) and source == "shipping.md":
+        return 0.2
+    if ("2022" in q or "de-listing" in q or "delisting" in q) and source == "policy.md":
+        return 0.25
+    return 0.0
+
+
 class PolicyRAGService:
     def __init__(
         self,
@@ -156,7 +168,12 @@ class PolicyRAGService:
                 query_vec = embed_query(query_stripped)
                 if query_vec:
                     for chunk, vec in zip(self._chunks, self._embeddings):
-                        score = _cosine_similarity(query_vec, vec)
+                        semantic = _cosine_similarity(query_vec, vec)
+                        score = (
+                            semantic
+                            + _keyword_score(query_stripped, chunk) * 0.08
+                            + _source_prior_boost(query_stripped, chunk)
+                        )
                         ranked.append((score, chunk))
             if not ranked:
                 for chunk in self._chunks:

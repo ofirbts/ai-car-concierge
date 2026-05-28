@@ -42,7 +42,10 @@ def analyze_dialogue_turn(message: str, state: ConversationState) -> DialogueAna
         re.search(r"\b(english)\b", lower)
     )
     topic_shift = bool(
-        re.search(r"\b(something else|another option|different direction|not family)\b|משהו אחר|בלי טיולים משפחתיים", lower)
+        re.search(
+            r"\b(something else|samthing else|somthing else|another option|different direction|not family)\b|משהו אחר|בלי טיולים משפחתיים",
+            lower,
+        )
     )
     exploratory_user = bool(
         re.search(r"\b(not sure|just exploring|still thinking)\b|מתלבט|רק בודק", lower)

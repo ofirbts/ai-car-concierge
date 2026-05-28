@@ -350,7 +350,7 @@ def _is_topic_reset_request(message: str) -> bool:
     lower = message.lower()
     return bool(
         re.search(
-            r"\b(something else|another direction|different direction|not family|without family)\b|משהו אחר|בלי טיולים משפחתיים",
+            r"\b(something else|samthing else|somthing else|another direction|different direction|not family|without family)\b|משהו אחר|בלי טיולים משפחתיים",
             lower,
         )
     )
@@ -392,7 +392,7 @@ def _is_unclear_followup(message: str, state: ConversationState) -> bool:
         return False
     if _matches_any(message, COMPARE_SIGNALS + RESERVE_SIGNALS + PURCHASE_SIGNALS):
         return False
-    if _is_budget_objection(message) or _wants_new_search(message):
+    if _is_budget_objection(message):
         return False
     if _parse_use_case(message) or _parse_fuel(message) or _parse_body_type(message):
         return False

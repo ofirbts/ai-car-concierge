@@ -79,6 +79,27 @@ def test_unclear_followup_triggers_clarify_constraints(isolated_db):
     assert "what should i change first" in turn.reply.lower()
 
 
+def test_typo_something_else_also_triggers_clarify_constraints(isolated_db):
+    state = ConversationState(session_id="d6")
+    state.turn_count = 5
+    state.passengers = 4
+    state.budget = 75000
+    state.use_case = "family trips"
+    state.body_type = "suv"
+    state.last_recommended_ids = [55, 77, 69]
+    extracted = classify_intent_rule_based("no samthing else")
+    turn = handle_sales_turn(
+        "no samthing else",
+        extracted,
+        state,
+        None,
+        PolicyRAGService(use_embeddings=False),
+    )
+    assert turn.intent.value == "general_chat"
+    assert turn.show_vehicle_cards is False
+    assert "what should i optimize now" in turn.reply.lower() or "what should i change first" in turn.reply.lower()
+
+
 def test_similarity_guard_detects_near_duplicates():
     a = "My first pick is #55 because it has strong cabin space."
     b = "My first pick is #55 because it has strong cabin space."
