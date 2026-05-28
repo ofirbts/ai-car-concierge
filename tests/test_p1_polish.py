@@ -104,3 +104,37 @@ def test_smalltalk_does_not_repeat_recommendations(isolated_db):
     assert turn.show_vehicle_cards is False
     assert turn.vehicles == []
     assert "advisor" in turn.reply.lower()
+
+
+def test_passenger_parsing_handles_short_inputs(isolated_db):
+    state = ConversationState(session_id="pax-parse")
+    extracted = classify_intent_rule_based("hello")
+
+    update_state_from_message(state, "לבד", extracted, None)
+    assert state.passengers == 1
+
+    update_state_from_message(state, "2", extracted, None)
+    assert state.passengers == 2
+
+    update_state_from_message(state, "4", extracted, None)
+    assert state.passengers == 4
+
+    update_state_from_message(state, "two", extracted, None)
+    assert state.passengers == 2
+
+
+def test_discovery_advances_after_short_passenger_answer(isolated_db):
+    session_id = handle_chat(
+        ChatRequest(message="מה עושים כאן?"),
+        rag=_rag(),
+    ).session_id
+    response = handle_chat(
+        ChatRequest(message="לבד", session_id=session_id),
+        rag=_rag(),
+    )
+    assert "how many people" not in response.reply.lower()
+    assert (
+        "budget" in response.reply.lower()
+        or "תקציב" in response.reply
+        or "mainly use the car" in response.reply.lower()
+    )

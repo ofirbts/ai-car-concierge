@@ -129,6 +129,7 @@ def _matches_any(message: str, patterns: tuple[str, ...]) -> bool:
 
 def _parse_passengers(message: str) -> int | None:
     lower = message.lower()
+    stripped = lower.strip()
     word_numbers = {
         "one": 1,
         "two": 2,
@@ -140,6 +141,13 @@ def _parse_passengers(message: str) -> int | None:
     for word, value in word_numbers.items():
         if re.search(rf"\b{word}\s+(people|passengers|riders)\b", lower):
             return value
+    for word, value in word_numbers.items():
+        if stripped == word:
+            return value
+    if re.fullmatch(r"\d+", stripped):
+        value = int(stripped)
+        if 1 <= value <= 9:
+            return value
     if re.search(r"\bfamily of (\d+)\b", lower):
         return int(re.search(r"\bfamily of (\d+)\b", lower).group(1))
     if re.search(r"\b(\d+)\s*(people|passengers|riders)\b", lower):
@@ -150,6 +158,8 @@ def _parse_passengers(message: str) -> int | None:
         return 4
     if re.search(r"\bcouple\b|\btwo people\b|\bזוג\b", lower):
         return 2
+    if re.search(r"\bsolo\b|\balone\b|\bjust me\b|\bonly me\b|\bלבד\b|\bרק אני\b", lower):
+        return 1
     if re.search(r"\bme and my partner\b|\bmy partner and i\b", lower):
         return 2
     if re.search(r"\bpair\b", lower):
