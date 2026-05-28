@@ -9,8 +9,12 @@ from backend.conversation_state import ConversationState
 class DialogueAnalysis(BaseModel):
     intent_label: str
     objection: str | None = None
+    invalid_budget: str | None = None
     frustration: bool = False
     smalltalk: bool = False
+    playful_input: bool = False
+    confused_user: bool = False
+    hesitant_user: bool = False
     topic_shift: bool = False
     clarification_request: bool = False
     language_switch_hebrew: bool = False
@@ -21,11 +25,22 @@ class DialogueAnalysis(BaseModel):
 
 def analyze_dialogue_turn(message: str, state: ConversationState) -> DialogueAnalysis:
     lower = message.lower().strip()
+    if re.search(r"[\u0590-\u05FF]", message):
+        state.language_preference = "he"
     frustration = bool(
         re.search(r"\b(bad idea|not good|terrible|awful|this is bad|you're not listening)\b|זוועה|לא טוב", lower)
     )
     smalltalk = bool(
         re.search(r"\b(how old are you|how old are u|who are you|tell me about yourself)\b|בן כמה|מי אתה", lower)
+    )
+    playful_input = bool(
+        re.search(r"\b(lol|haha|funny|buy the dealership)\b|חח|😅|😄", lower)
+    )
+    confused_user = bool(
+        re.search(r"\b(what do we do here|what is this|how does this work)\b|מה עושים כאן|איך זה עובד", lower)
+    )
+    hesitant_user = bool(
+        re.search(r"\b(not sure|maybe|still thinking|idk)\b|לא בטוח|מתלבט", lower)
     )
     objection = None
     if re.search(r"\b(expensive|too expensive|cheaper|price sensitive|budget)\b|יקר|זול", lower):
@@ -35,6 +50,11 @@ def analyze_dialogue_turn(message: str, state: ConversationState) -> DialogueAna
     clarification_request = bool(
         re.search(r"\b(what do you mean|explain|why|clarify)\b|תסביר|למה", lower)
     )
+    invalid_budget = None
+    if re.fullmatch(r"\$?\s*\d{1,3}\s*\$?", lower):
+        invalid_budget = "too_low"
+    if re.fullmatch(r"\$?\s*\d{7,}\s*\$?", lower):
+        invalid_budget = "too_high"
     language_switch_hebrew = bool(
         re.search(r"\b(hebrew|עברית)\b", lower)
     )
@@ -54,7 +74,13 @@ def analyze_dialogue_turn(message: str, state: ConversationState) -> DialogueAna
     if exploratory_user or smalltalk:
         buying_readiness = "low"
 
-    if smalltalk:
+    if invalid_budget:
+        intent_label = "invalid_budget"
+    elif confused_user:
+        intent_label = "confused_user"
+    elif playful_input:
+        intent_label = "playful_input"
+    elif smalltalk:
         intent_label = "smalltalk"
     elif objection == "price":
         intent_label = "objection_price"
@@ -72,8 +98,12 @@ def analyze_dialogue_turn(message: str, state: ConversationState) -> DialogueAna
     return DialogueAnalysis(
         intent_label=intent_label,
         objection=objection,
+        invalid_budget=invalid_budget,
         frustration=frustration,
         smalltalk=smalltalk,
+        playful_input=playful_input,
+        confused_user=confused_user,
+        hesitant_user=hesitant_user,
         topic_shift=topic_shift,
         clarification_request=clarification_request,
         language_switch_hebrew=language_switch_hebrew,

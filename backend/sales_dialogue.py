@@ -409,6 +409,10 @@ def _is_unclear_followup(message: str, state: ConversationState) -> bool:
     return bool(re.search(r"\b(no|nah|not this|other|else)\b|לא|אחר", lower))
 
 
+def _lang(state: ConversationState, en: str, he: str) -> str:
+    return he if state.language_preference == "he" else en
+
+
 def _explicit_fast_options_request(message: str) -> bool:
     lower = message.lower()
     return bool(
@@ -632,6 +636,78 @@ def handle_sales_turn(
             rag_mode="sales_dialogue+language_switch",
             show_vehicle_cards=False,
         )
+    if policy.action == "clarify_budget_low":
+        state.phase = DialoguePhase.CLARIFICATION
+        reply = _lang(
+            state,
+            "Just to confirm, did you mean around $200k or $20k?",
+            "רק לוודא — התכוונת לסביבות 200 אלף דולר או 20 אלף?",
+        )
+        reply = _guard_repetition_and_progress(state, reply)
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+clarify_budget",
+            show_vehicle_cards=False,
+        )
+    if policy.action == "clarify_budget_high":
+        state.phase = DialoguePhase.CLARIFICATION
+        reply = _lang(
+            state,
+            "That is a huge number. Want me to keep this in a practical family-car range, like $40k-$90k?",
+            "זה מספר עצום. שנכוון לטווח ריאלי לרכב משפחתי, למשל 40–90 אלף דולר?",
+        )
+        reply = _guard_repetition_and_progress(state, reply)
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+clarify_budget",
+            show_vehicle_cards=False,
+        )
+    if policy.action == "explain_product":
+        state.phase = DialoguePhase.EXPLORATORY_GUIDANCE
+        reply = _lang(
+            state,
+            "Great question. I help you pick a car through a short conversation, then I compare top fits and can reserve one when you are ready.",
+            "שאלה מצוינת. אני עוזר לבחור רכב דרך שיחה קצרה, ואז משווה התאמות טובות ויכול גם לשמור רכב כשתרצה.",
+        )
+        reply = _guard_repetition_and_progress(state, reply)
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+explain_product",
+            show_vehicle_cards=False,
+        )
+    if policy.action == "playful_response":
+        state.phase = DialoguePhase.EXPLORATORY_GUIDANCE
+        reply = _lang(
+            state,
+            "Love the vibe 😄. Want me to keep this practical, fun, or a mix of both?",
+            "אהבתי את הווייב 😄 רוצה שנלך על פרקטי, כיף, או שילוב של שניהם?",
+        )
+        reply = _guard_repetition_and_progress(state, reply)
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+playful",
+            show_vehicle_cards=False,
+        )
     if policy.action == "smalltalk_repair":
         state.phase = DialoguePhase.RECOMMENDING if state.last_recommended_ids else DialoguePhase.DISCOVERY
         reply = (
@@ -669,7 +745,11 @@ def handle_sales_turn(
 
     if _is_unclear_followup(message, state):
         state.phase = DialoguePhase.DISCOVERY
-        reply = "Understood. What should I change first — price, size, fuel efficiency, or body style?"
+        reply = _lang(
+            state,
+            "Understood. What should I change first — price, size, fuel efficiency, or body style?",
+            "הבנתי. מה לשנות קודם — מחיר, גודל, חסכון בדלק או סוג רכב?",
+        )
         reply = _guard_repetition_and_progress(state, reply)
         save_conversation_state(state)
         return SalesTurnResult(

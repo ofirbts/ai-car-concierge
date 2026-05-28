@@ -16,6 +16,14 @@ def choose_dialogue_policy(state: ConversationState, analysis: DialogueAnalysis)
         return DialoguePolicyDecision(action="switch_language_he")
     if analysis.language_switch_english:
         return DialoguePolicyDecision(action="switch_language_en")
+    if analysis.invalid_budget == "too_low":
+        return DialoguePolicyDecision(action="clarify_budget_low")
+    if analysis.invalid_budget == "too_high":
+        return DialoguePolicyDecision(action="clarify_budget_high")
+    if analysis.confused_user:
+        return DialoguePolicyDecision(action="explain_product")
+    if analysis.playful_input:
+        return DialoguePolicyDecision(action="playful_response")
     if analysis.smalltalk:
         return DialoguePolicyDecision(action="smalltalk_repair")
     if analysis.frustration:

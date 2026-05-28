@@ -21,6 +21,20 @@ def test_policy_engine_triggers_repair_on_frustration():
     assert decision.question
 
 
+def test_policy_engine_detects_confused_user():
+    state = ConversationState(session_id="d2b")
+    analysis = analyze_dialogue_turn("מה עושים כאן?", state)
+    decision = choose_dialogue_policy(state, analysis)
+    assert decision.action == "explain_product"
+
+
+def test_policy_engine_detects_invalid_budget():
+    state = ConversationState(session_id="d2c")
+    analysis = analyze_dialogue_turn("200", state)
+    decision = choose_dialogue_policy(state, analysis)
+    assert decision.action == "clarify_budget_low"
+
+
 def test_topic_shift_recalibrates_without_recommendation_cards(isolated_db):
     state = ConversationState(session_id="d3")
     state.turn_count = 4
@@ -56,6 +70,36 @@ def test_language_switch_to_hebrew(isolated_db):
     assert state.language_preference == "he"
     assert turn.show_vehicle_cards is False
     assert "בעברית" in turn.reply
+
+
+def test_confused_prompt_returns_product_explanation(isolated_db):
+    state = ConversationState(session_id="d4b")
+    extracted = classify_intent_rule_based("מה עושים כאן?")
+    turn = handle_sales_turn(
+        "מה עושים כאן?",
+        extracted,
+        state,
+        None,
+        PolicyRAGService(use_embeddings=False),
+    )
+    assert turn.intent.value == "general_chat"
+    assert turn.show_vehicle_cards is False
+    assert "עוזר לבחור רכב" in turn.reply
+
+
+def test_invalid_budget_short_input_triggers_clarification(isolated_db):
+    state = ConversationState(session_id="d4c")
+    extracted = classify_intent_rule_based("200")
+    turn = handle_sales_turn(
+        "200",
+        extracted,
+        state,
+        None,
+        PolicyRAGService(use_embeddings=False),
+    )
+    assert turn.intent.value == "general_chat"
+    assert turn.show_vehicle_cards is False
+    assert "200" in turn.reply
 
 
 def test_unclear_followup_triggers_clarify_constraints(isolated_db):
