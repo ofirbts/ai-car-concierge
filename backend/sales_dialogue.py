@@ -5,22 +5,35 @@ import re
 from dataclasses import dataclass
 
 from backend.conversation_state import ConversationState, DialoguePhase, save_conversation_state
+from backend.conversation_understanding import (
+    ConvIntent,
+    ConversationUnderstanding,
+    understand_conversation,
+)
 from backend.conversational_nlg import (
+    generate_ask_budget,
+    generate_ask_city_vs_highway,
+    generate_ask_passengers,
+    generate_ask_use_case,
     generate_clarifying_question,
     generate_comparison,
+    generate_criteria_explanation,
+    generate_exploratory_response,
+    generate_greeting_response,
     generate_purchase_prompt,
     generate_recommendations,
+    generate_repair_turn_response,
     generate_reserve_prompt,
+    generate_smalltalk_response,
+    generate_topic_shift_response,
     generate_welcome,
 )
 from backend.database import Vehicle, get_vehicle_by_id
-from backend.dialogue_analysis import analyze_dialogue_turn
-from backend.dialogue_policy import choose_dialogue_policy
+from backend.dialogue_policy import PolicyAction, PolicyDecision, decide_policy
 from backend.intent import (
     ExtractedIntent,
     IntentKind,
     extract_email,
-    extract_price_max,
     extract_vehicle_id,
 )
 from backend.inventory_retrieval import (
@@ -71,9 +84,6 @@ FUEL_SIGNALS = (r"\bfuel\b", r"\bgas\b", r"\belectric\b", r"\bhybrid\b", r"\bח�
 
 DIALOGUE_CONTRACT = {
     "min_discovery_turns_before_full_reco": 2,
-    "force_clarify_on_objection": True,
-    "force_language_lock": True,
-    "max_similar_replies_in_row": 1,
     "force_progress_after_stall_turns": 2,
 }
 
@@ -127,92 +137,84 @@ def _matches_any(message: str, patterns: tuple[str, ...]) -> bool:
     return any(re.search(p, lower) for p in patterns)
 
 
-def _parse_passengers(message: str) -> int | None:
-    lower = message.lower()
-    stripped = lower.strip()
-    word_numbers = {
-        "one": 1,
-        "two": 2,
-        "three": 3,
-        "four": 4,
-        "five": 5,
-        "six": 6,
-    }
-    for word, value in word_numbers.items():
-        if re.search(rf"\b{word}\s+(people|passengers|riders)\b", lower):
-            return value
-    for word, value in word_numbers.items():
-        if stripped == word:
-            return value
-    if re.fullmatch(r"\d+", stripped):
-        value = int(stripped)
-        if 1 <= value <= 9:
-            return value
-    if re.search(r"\bfamily of (\d+)\b", lower):
-        return int(re.search(r"\bfamily of (\d+)\b", lower).group(1))
-    if re.search(r"\b(\d+)\s*(people|passengers|riders)\b", lower):
-        return int(re.search(r"\b(\d+)\s*(people|passengers|riders)\b", lower).group(1))
-    if re.search(r"\bone kid\b|\bone child\b|\bילד אחד\b", lower):
-        return 3
-    if re.search(r"\btwo kids\b|\btwo children\b|\bשני ילדים\b", lower):
-        return 4
-    if re.search(r"\bcouple\b|\btwo people\b|\bזוג\b", lower):
-        return 2
-    if re.search(r"\bsolo\b|\balone\b|\bjust me\b|\bonly me\b|\bלבד\b|\bרק אני\b", lower):
-        return 1
-    if re.search(r"\bme and my partner\b|\bmy partner and i\b", lower):
-        return 2
-    if re.search(r"\bpair\b", lower):
-        return 2
-    if re.search(r"\bbaby\b|\binfant\b|\bתינוק\b", lower):
-        return 3
-    return None
+def _too_similar(a: str, b: str) -> bool:
+    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio() >= 0.82
 
 
-def _parse_budget(message: str, extracted: ExtractedIntent) -> float | None:
-    price = extract_price_max(message)
-    if price is not None:
-        return price
-    if extracted.price_max is not None:
-        return extracted.price_max
+def _guard_repetition_and_progress(state: ConversationState, reply: str) -> str:
+    previous = state.last_assistant_reply or ""
+    if previous and _too_similar(reply, previous):
+        state.repetition_count += 1
+    else:
+        state.repetition_count = 0
+    state.last_assistant_reply = reply
+    if state.repetition_count >= 1:
+        state.stall_turns += 1
+    else:
+        state.stall_turns = 0
+    if state.stall_turns >= DIALOGUE_CONTRACT["force_progress_after_stall_turns"]:
+        state.stall_turns = 0
+        if state.language_preference == "he":
+            return "נעצור רגע ונדייק. מה הכי חשוב עכשיו: מחיר, מרווח, נוחות או חסכון בדלק?"
+        return "Let's recalibrate quickly. What matters most now: price, space, comfort, or efficiency?"
+    return reply
+
+
+def _lang(state: ConversationState, en: str, he: str) -> str:
+    return he if state.language_preference == "he" else en
+
+
+def _explicit_fast_options_request(message: str) -> bool:
     lower = message.lower()
-    match = re.search(
-        r"(?:budget|around|about|roughly|up to|max)\s*(?:is|of|around|about)?\s*\$?\s*([\d,]+)",
-        lower,
+    return bool(
+        re.search(
+            r"\b(show me options now|just show options|skip questions|just recommend)\b|תראה אופציות עכשיו",
+            lower,
+        )
     )
-    if match:
-        return float(match.group(1).replace(",", ""))
-    match = re.search(r"\$?\s*([\d,]+)\s*(?:budget|max|total)", lower)
-    if match:
-        return float(match.group(1).replace(",", ""))
-    match = re.search(r"\b(\d{2,3})\s*k\b", lower)
-    if match:
-        return float(match.group(1)) * 1000
+
+
+def _vehicles_from_ids(ids: list[int]) -> list[Vehicle]:
+    out: list[Vehicle] = []
+    for vid in ids:
+        vehicle = get_vehicle_by_id(vid)
+        if vehicle is not None:
+            out.append(vehicle)
+    return out
+
+
+def _resolve_compare_ids(state: ConversationState, message: str) -> list[int]:
+    ids = [int(x) for x in re.findall(r"#(\d+)", message)]
+    if len(ids) >= 2:
+        return ids[:4]
+    if state.last_recommended_ids:
+        return state.last_recommended_ids[: min(3, len(state.last_recommended_ids))]
+    if state.shortlist_ids:
+        return state.shortlist_ids[: min(3, len(state.shortlist_ids))]
+    return []
+
+
+def _pick_vehicle_for_action(state: ConversationState, message: str) -> Vehicle | None:
+    vid = extract_vehicle_id(message)
+    if vid is not None:
+        return get_vehicle_by_id(vid)
+    if state.shortlist_ids:
+        return get_vehicle_by_id(state.shortlist_ids[-1])
+    if state.last_recommended_ids:
+        return get_vehicle_by_id(state.last_recommended_ids[0])
     return None
 
 
-def _parse_body_type(message: str) -> str | None:
-    lower = message.lower()
-    if re.search(r"\bsuv\b", lower):
-        return "suv"
-    if re.search(r"\bsedan\b", lower):
-        return "sedan"
-    if re.search(r"\bsports?\b|\bcoupe\b", lower):
-        return "sports"
-    return None
-
-
-def _parse_fuel(message: str) -> str | None:
-    lower = message.lower()
-    if "electric" in lower or "ev" in lower:
-        return "Electric"
-    if "hybrid" in lower:
-        return "Hybrid"
-    if "plug-in" in lower or "plugin" in lower:
-        return "Plug-in Hybrid"
-    if "gas" in lower or "gasoline" in lower:
-        return "Gasoline"
-    return None
+def _refinement_key(message: str, state: ConversationState) -> str:
+    if _matches_any(message, SPACE_SIGNALS) or state.space_priority == "space":
+        return "space"
+    if _matches_any(message, FUEL_SIGNALS) or state.fuel_preference:
+        return f"fuel:{state.fuel_preference or ''}"
+    if state.body_type:
+        return f"body:{state.body_type}"
+    if state.use_case:
+        return f"use:{state.use_case}"
+    return message.strip().lower()[:48]
 
 
 def _parse_use_case(message: str) -> str | None:
@@ -234,93 +236,6 @@ def _parse_use_case(message: str) -> str | None:
     return None
 
 
-def _parse_timeline(message: str) -> str | None:
-    lower = message.lower()
-    if re.search(r"\basap\b|\bsoon\b|\bthis week\b|\bמיד\b", lower):
-        return "soon"
-    if re.search(r"\bmonth\b|\bnext month\b", lower):
-        return "within a month"
-    return None
-
-
-def update_state_from_message(
-    state: ConversationState,
-    message: str,
-    extracted: ExtractedIntent,
-    user_email: str | None,
-) -> ConversationState:
-    if _is_topic_reset_request(message):
-        state.use_case = None
-        state.body_type = None
-        state.space_priority = None
-        state.last_refinement_key = None
-        state.last_recommended_ids = []
-
-    passengers = _parse_passengers(message)
-    if passengers is not None:
-        state.passengers = passengers
-        state.family_size = passengers
-
-    budget = _parse_budget(message, extracted)
-    if budget is not None:
-        state.budget = budget
-
-    body = _parse_body_type(message)
-    if body:
-        state.body_type = body
-    elif passengers and passengers >= 4 and not state.body_type:
-        state.body_type = "suv"
-    elif passengers == 2 and not state.body_type:
-        state.body_type = "sedan"
-
-    fuel = _parse_fuel(message)
-    if fuel:
-        state.fuel_preference = fuel
-
-    use_case = _parse_use_case(message)
-    if use_case:
-        state.use_case = use_case
-    else:
-        for profile in detect_semantic_profiles(message):
-            if profile != "budget":
-                state.use_case = profile.replace("_", " ")
-                break
-
-    timeline = _parse_timeline(message)
-    if timeline:
-        state.timeline = timeline
-
-    if _matches_any(message, SPACE_SIGNALS):
-        state.space_priority = "space"
-    elif _matches_any(message, FUEL_SIGNALS):
-        state.space_priority = "fuel"
-
-    email = extract_email(message, user_email)
-    if email:
-        state.contact_email = email
-
-    if extracted.make and not state.body_type:
-        pass
-
-    vehicle_id = extract_vehicle_id(message) or extracted.vehicle_id
-    if vehicle_id is not None and vehicle_id not in state.shortlist_ids:
-        state.shortlist_ids.append(vehicle_id)
-
-    return state
-
-
-def _next_discovery_question(state: ConversationState) -> str | None:
-    if state.passengers is None and state.family_size is None:
-        return "How many people usually ride along with you?"
-    if not state.use_case and not state.body_type:
-        return "What will you mainly use the car for — family trips, city driving, or something else?"
-    if state.budget is None:
-        return "What's your target budget (roughly)?"
-    if state.space_priority is None and (state.passengers or 0) >= 3:
-        return "Do you care more about interior space or fuel economy?"
-    return None
-
-
 def _contextual_discovery_question(state: ConversationState, question: str) -> str:
     if question == "What's your target budget (roughly)?":
         parts: list[str] = []
@@ -335,127 +250,64 @@ def _contextual_discovery_question(state: ConversationState, question: str) -> s
     return question
 
 
-def _resolve_compare_ids(state: ConversationState, message: str) -> list[int]:
-    ids = [int(x) for x in re.findall(r"#(\d+)", message)]
-    if len(ids) >= 2:
-        return ids[:4]
-    if state.last_recommended_ids:
-        return state.last_recommended_ids[: min(3, len(state.last_recommended_ids))]
-    if state.shortlist_ids:
-        return state.shortlist_ids[: min(3, len(state.shortlist_ids))]
-    return []
+def update_state_from_message(
+    state: ConversationState,
+    message: str,
+    extracted: ExtractedIntent,
+    user_email: str | None,
+) -> ConversationState:
+    from backend.conversation_understanding import _regex_understand
+    understanding = _regex_understand(message)
+    return _update_state_from_understanding(state, understanding, message, extracted, user_email)
 
 
-def _wants_new_search(message: str) -> bool:
-    lower = message.lower()
-    return bool(
-        re.search(
-            r"\b(show|find|search|other|different|another|more options|something else|samthing else|somthing else)\b|משהו אחר",
-            lower,
-        )
-    )
+def _update_state_from_understanding(
+    state: ConversationState,
+    understanding: ConversationUnderstanding,
+    message: str,
+    extracted: ExtractedIntent,
+    user_email: str | None,
+) -> ConversationState:
+    if understanding.slot_confidence >= 0.65:
+        slots = understanding.slots
+        if slots.passengers is not None:
+            state.passengers = slots.passengers
+            state.family_size = slots.passengers
+        if slots.budget is not None:
+            state.budget = slots.budget
+        if slots.use_case is not None:
+            state.use_case = slots.use_case
+        if slots.city_vs_highway is not None:
+            state.city_vs_highway = slots.city_vs_highway
+        if slots.comfort_vs_efficiency is not None:
+            state.comfort_vs_efficiency = slots.comfort_vs_efficiency
+        if slots.body_type is not None:
+            state.body_type = slots.body_type
+        if slots.fuel_preference is not None:
+            state.fuel_preference = slots.fuel_preference
 
+    if state.passengers is not None and state.body_type is None:
+        if state.passengers >= 4:
+            state.body_type = "suv"
 
-def _is_topic_reset_request(message: str) -> bool:
-    lower = message.lower()
-    return bool(
-        re.search(
-            r"\b(something else|samthing else|somthing else|another direction|different direction|not family|without family)\b|משהו אחר|בלי טיולים משפחתיים",
-            lower,
-        )
-    )
+    if extracted.price_max and state.budget is None:
+        state.budget = extracted.price_max
 
+    email = extract_email(message, user_email)
+    if email:
+        state.contact_email = email
 
-def _is_smalltalk(message: str) -> bool:
-    lower = message.lower().strip()
-    return bool(
-        re.search(
-            r"\b(how old are you|how old are u|who are you|what are you|tell me about yourself|joke)\b|בן כמה|מי אתה|מה אתה",
-            lower,
-        )
-    )
+    vehicle_id = extract_vehicle_id(message) or extracted.vehicle_id
+    if vehicle_id is not None and vehicle_id not in state.shortlist_ids:
+        state.shortlist_ids.append(vehicle_id)
 
-
-def _is_preference_refinement(message: str, state: ConversationState) -> bool:
-    if not state.last_recommended_ids:
-        return False
-    if _wants_new_search(message):
-        return False
-    if _matches_any(
-        message,
-        COMPARE_SIGNALS + RESERVE_SIGNALS + PURCHASE_SIGNALS,
-    ):
-        return False
-    return bool(
-        _matches_any(message, SPACE_SIGNALS + FUEL_SIGNALS)
-        or _parse_use_case(message)
-        or _parse_fuel(message)
-        or _parse_body_type(message)
-    )
-
-
-def _is_unclear_followup(message: str, state: ConversationState) -> bool:
-    if not state.last_recommended_ids:
-        return False
-    lower = message.lower().strip()
-    if len(lower) > 28:
-        return False
-    if _matches_any(message, COMPARE_SIGNALS + RESERVE_SIGNALS + PURCHASE_SIGNALS):
-        return False
-    if _is_budget_objection(message):
-        return False
-    if _parse_use_case(message) or _parse_fuel(message) or _parse_body_type(message):
-        return False
-    return bool(re.search(r"\b(no|nah|not this|other|else)\b|לא|אחר", lower))
-
-
-def _lang(state: ConversationState, en: str, he: str) -> str:
-    return he if state.language_preference == "he" else en
-
-
-def _explicit_fast_options_request(message: str) -> bool:
-    lower = message.lower()
-    return bool(
-        re.search(r"\b(show me options now|just show options|skip questions|just recommend)\b|תראה אופציות עכשיו", lower)
-    )
-
-
-def _too_similar(a: str, b: str) -> bool:
-    return difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio() >= 0.82
-
-
-def _guard_repetition_and_progress(state: ConversationState, reply: str) -> str:
-    previous = state.last_assistant_reply or ""
-    if previous and _too_similar(reply, previous):
-        state.repetition_count += 1
-    else:
-        state.repetition_count = 0
-    state.last_assistant_reply = reply
-    if state.repetition_count >= DIALOGUE_CONTRACT["max_similar_replies_in_row"]:
-        state.stall_turns += 1
-    else:
-        state.stall_turns = 0
-    if state.stall_turns >= DIALOGUE_CONTRACT["force_progress_after_stall_turns"]:
-        state.stall_turns = 0
-        if state.language_preference == "he":
-            return "נעצור רגע ונדייק. מה הכי חשוב עכשיו: מחיר, מרווח, נוחות או חסכון בדלק?"
-        return "Let's recalibrate quickly. What matters most now: price, space, comfort, or efficiency?"
-    return reply
-
-
-def _is_budget_objection(message: str) -> bool:
-    lower = message.lower()
-    return bool(
-        re.search(
-            r"\b(too expensive|expensive|cheaper|lower budget|over budget|budget issue|can't afford)\b",
-            lower,
-        )
-    )
+    return state
 
 
 def _handle_budget_objection(
     state: ConversationState,
     message: str,
+    extracted: ExtractedIntent,
 ) -> SalesTurnResult | None:
     if not state.last_recommended_ids:
         return None
@@ -467,12 +319,12 @@ def _handle_budget_objection(
     if state.budget:
         cap = min(cap, state.budget * 0.85)
     cap = max(cap, 12000)
-    extracted = ExtractedIntent(
+    search_extracted = ExtractedIntent(
         intent=IntentKind.INVENTORY_SEARCH,
         price_max=cap,
     )
     query = message.strip() or "affordable practical value under budget"
-    result = hybrid_search_inventory(query, state=state, extracted=extracted, limit=6)
+    result = hybrid_search_inventory(query, state=state, extracted=search_extracted, limit=6)
     fresh = [v for v in result.vehicles if v.price < floor_price]
     if not fresh:
         fresh = sorted(current, key=lambda v: v.price)[:3]
@@ -513,34 +365,17 @@ def _handle_budget_objection(
     )
 
 
-def _vehicles_from_ids(ids: list[int]) -> list[Vehicle]:
-    out: list[Vehicle] = []
-    for vid in ids:
-        vehicle = get_vehicle_by_id(vid)
-        if vehicle is not None:
-            out.append(vehicle)
-    return out
-
-
-def _refinement_key(message: str, state: ConversationState) -> str:
-    if _matches_any(message, SPACE_SIGNALS) or state.space_priority == "space":
-        return "space"
-    if _matches_any(message, FUEL_SIGNALS) or state.fuel_preference:
-        return f"fuel:{state.fuel_preference or ''}"
-    body = _parse_body_type(message) or state.body_type
-    if body:
-        return f"body:{body}"
-    use_case = _parse_use_case(message) or state.use_case
-    if use_case:
-        return f"use:{use_case}"
-    return message.strip().lower()[:48]
-
-
 def _handle_preference_refinement(
     state: ConversationState,
     message: str,
 ) -> SalesTurnResult | None:
-    if not _is_preference_refinement(message, state):
+    if not state.last_recommended_ids:
+        return None
+    if not (
+        _matches_any(message, SPACE_SIGNALS + FUEL_SIGNALS)
+        or state.space_priority
+        or state.fuel_preference
+    ):
         return None
     vehicles = _vehicles_from_ids(state.last_recommended_ids[:4])
     if not vehicles:
@@ -587,17 +422,6 @@ def _handle_preference_refinement(
     )
 
 
-def _pick_vehicle_for_action(state: ConversationState, message: str) -> Vehicle | None:
-    vid = extract_vehicle_id(message)
-    if vid is not None:
-        return get_vehicle_by_id(vid)
-    if state.shortlist_ids:
-        return get_vehicle_by_id(state.shortlist_ids[-1])
-    if state.last_recommended_ids:
-        return get_vehicle_by_id(state.last_recommended_ids[0])
-    return None
-
-
 def handle_sales_turn(
     message: str,
     extracted: ExtractedIntent,
@@ -606,16 +430,37 @@ def handle_sales_turn(
     rag: PolicyRAGService,
 ) -> SalesTurnResult:
     state.bump_turn()
-    update_state_from_message(state, message, extracted, user_email)
-    analysis = analyze_dialogue_turn(message, state)
-    policy = choose_dialogue_policy(state, analysis)
+    state.add_history_turn("user", message)
 
-    if policy.action == "switch_language_he":
-        state.language_preference = "he"
+    understanding = understand_conversation(message, state)
+
+    _update_state_from_understanding(state, understanding, message, extracted, user_email)
+
+    import re as _re
+    _explicit_lang_switch = bool(
+        _re.search(r"\b(hebrew|עברית|דבר עברית|תדבר עברית|answer in hebrew|speak hebrew)\b", message.lower())
+        or _re.search(r"\b(english|speak english|answer in english|דבר אנגלית|תדבר אנגלית)\b", message.lower())
+    )
+    language_just_switched = _explicit_lang_switch and (
+        (understanding.language == "he" and state.language_preference != "he")
+        or (understanding.language == "en" and state.language_preference == "he")
+    )
+
+    policy = decide_policy(state, understanding)
+
+    lang = policy.language
+
+    if language_just_switched:
+        if state.language_preference == "he":
+            reply = "מעולה, ממשיך בעברית. כדי לדייק אותך מהר, מה התקציב ומה הכי חשוב לך כרגע?"
+        else:
+            reply = "Great, I'll continue in English. What should I optimize first: budget, comfort, efficiency, or space?"
+        reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.DISCOVERY if not state.has_discovery_basics() else DialoguePhase.RECOMMENDING
+        state.add_history_turn("assistant", reply, "language_switch")
         save_conversation_state(state)
         return SalesTurnResult(
-            reply="מעולה, ממשיך בעברית. כדי לדייק אותך מהר, מה התקציב ומה הכי חשוב לך כרגע?",
+            reply=reply,
             state=state,
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
@@ -623,27 +468,15 @@ def handle_sales_turn(
             rag_mode="sales_dialogue+language_switch",
             show_vehicle_cards=False,
         )
-    if policy.action == "switch_language_en":
-        state.language_preference = "en"
-        state.phase = DialoguePhase.DISCOVERY if not state.has_discovery_basics() else DialoguePhase.RECOMMENDING
-        save_conversation_state(state)
-        return SalesTurnResult(
-            reply="Great, I'll continue in English. What should I optimize first: budget, comfort, efficiency, or space?",
-            state=state,
-            vehicles=[],
-            intent=IntentKind.GENERAL_CHAT,
-            phase=state.phase,
-            rag_mode="sales_dialogue+language_switch",
-            show_vehicle_cards=False,
-        )
-    if policy.action == "clarify_budget_low":
-        state.phase = DialoguePhase.CLARIFICATION
-        reply = _lang(
-            state,
-            "Just to confirm, did you mean around $200k or $20k?",
-            "רק לוודא — התכוונת לסביבות 200 אלף דולר או 20 אלף?",
-        )
+
+    if policy.action == PolicyAction.HANDLE_GREETING:
+        if state.turn_count == 1:
+            reply = generate_welcome(state)
+        else:
+            reply = generate_greeting_response(state)
         reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "greeting")
         save_conversation_state(state)
         return SalesTurnResult(
             reply=reply,
@@ -651,69 +484,15 @@ def handle_sales_turn(
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
             phase=state.phase,
-            rag_mode="sales_dialogue+clarify_budget",
+            rag_mode="sales_dialogue+greeting",
             show_vehicle_cards=False,
         )
-    if policy.action == "clarify_budget_high":
-        state.phase = DialoguePhase.CLARIFICATION
-        reply = _lang(
-            state,
-            "That is a huge number. Want me to keep this in a practical family-car range, like $40k-$90k?",
-            "זה מספר עצום. שנכוון לטווח ריאלי לרכב משפחתי, למשל 40–90 אלף דולר?",
-        )
+
+    if policy.action == PolicyAction.RESPOND_TO_SMALLTALK:
+        reply = generate_smalltalk_response(state, message)
         reply = _guard_repetition_and_progress(state, reply)
-        save_conversation_state(state)
-        return SalesTurnResult(
-            reply=reply,
-            state=state,
-            vehicles=[],
-            intent=IntentKind.GENERAL_CHAT,
-            phase=state.phase,
-            rag_mode="sales_dialogue+clarify_budget",
-            show_vehicle_cards=False,
-        )
-    if policy.action == "explain_product":
-        state.phase = DialoguePhase.EXPLORATORY_GUIDANCE
-        reply = _lang(
-            state,
-            "Great question. I help you pick a car through a short conversation, then I compare top fits and can reserve one when you are ready.",
-            "שאלה מצוינת. אני עוזר לבחור רכב דרך שיחה קצרה, ואז משווה התאמות טובות ויכול גם לשמור רכב כשתרצה.",
-        )
-        reply = _guard_repetition_and_progress(state, reply)
-        save_conversation_state(state)
-        return SalesTurnResult(
-            reply=reply,
-            state=state,
-            vehicles=[],
-            intent=IntentKind.GENERAL_CHAT,
-            phase=state.phase,
-            rag_mode="sales_dialogue+explain_product",
-            show_vehicle_cards=False,
-        )
-    if policy.action == "playful_response":
-        state.phase = DialoguePhase.EXPLORATORY_GUIDANCE
-        reply = _lang(
-            state,
-            "Love the vibe 😄. Want me to keep this practical, fun, or a mix of both?",
-            "אהבתי את הווייב 😄 רוצה שנלך על פרקטי, כיף, או שילוב של שניהם?",
-        )
-        reply = _guard_repetition_and_progress(state, reply)
-        save_conversation_state(state)
-        return SalesTurnResult(
-            reply=reply,
-            state=state,
-            vehicles=[],
-            intent=IntentKind.GENERAL_CHAT,
-            phase=state.phase,
-            rag_mode="sales_dialogue+playful",
-            show_vehicle_cards=False,
-        )
-    if policy.action == "smalltalk_repair":
-        state.phase = DialoguePhase.RECOMMENDING if state.last_recommended_ids else DialoguePhase.DISCOVERY
-        reply = (
-            "I'm your AI car advisor. If you want, I can recalibrate now based on what matters most to you."
-        )
-        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.DISCOVERY if not state.last_recommended_ids else state.phase
+        state.add_history_turn("assistant", reply, "smalltalk")
         save_conversation_state(state)
         return SalesTurnResult(
             reply=reply,
@@ -724,17 +503,55 @@ def handle_sales_turn(
             rag_mode="sales_dialogue+smalltalk",
             show_vehicle_cards=False,
         )
-    if policy.action in {"repair_turn", "topic_shift_recalibrate"}:
-        state.phase = DialoguePhase.DISCOVERY
+
+    if policy.action == PolicyAction.EXPLAIN_PRODUCT:
+        reply = _lang(
+            state,
+            "Great question. I help you find a car through a short conversation, "
+            "then I compare top fits and can reserve one when you're ready.",
+            "שאלה מצוינת. אני עוזר לבחור רכב דרך שיחה קצרה, "
+            "ואז משווה את ההתאמות הטובות ויכול לשמור רכב כשתרצה.",
+        )
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.EXPLORATORY_GUIDANCE
+        state.add_history_turn("assistant", reply, "explain_product")
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+explain_product",
+            show_vehicle_cards=False,
+        )
+
+    if policy.action == PolicyAction.EXPLAIN_CRITERIA:
+        reply = generate_criteria_explanation(state)
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.EXPLORATORY_GUIDANCE
+        state.add_history_turn("assistant", reply, "explain_criteria")
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+explain_criteria",
+            show_vehicle_cards=False,
+        )
+
+    if policy.action == PolicyAction.REPAIR_TURN:
+        reply = generate_repair_turn_response(state)
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.REPAIR_TURN
         state.last_refinement_key = None
         state.last_recommended_ids = []
+        state.add_history_turn("assistant", reply, "repair_turn")
         save_conversation_state(state)
-        follow_up = policy.question or "What matters most in your decision right now?"
-        if state.language_preference == "he":
-            follow_up = "הבנתי. מה היה פחות מדויק — מחיר, גודל, נוחות או צריכת דלק?"
-        follow_up = _guard_repetition_and_progress(state, follow_up)
         return SalesTurnResult(
-            reply=follow_up,
+            reply=reply,
             state=state,
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
@@ -743,14 +560,22 @@ def handle_sales_turn(
             show_vehicle_cards=False,
         )
 
-    if _is_unclear_followup(message, state):
-        state.phase = DialoguePhase.DISCOVERY
-        reply = _lang(
-            state,
-            "Understood. What should I change first — price, size, fuel efficiency, or body style?",
-            "הבנתי. מה לשנות קודם — מחיר, גודל, חסכון בדלק או סוג רכב?",
-        )
+    if policy.action == PolicyAction.CLARIFY_BUDGET:
+        state.phase = DialoguePhase.CLARIFICATION
+        if policy.question_hint == "too_low":
+            reply = _lang(
+                state,
+                "Just to confirm — did you mean around $200k or perhaps $20k?",
+                "רק לוודא — התכוונת לסביבות 200 אלף דולר או 20 אלף?",
+            )
+        else:
+            reply = _lang(
+                state,
+                "That's quite a range! Want me to keep this within a practical car budget, like $40k–$90k?",
+                "זה טווח עצום. שנכוון לטווח ריאלי לרכב, למשל 40–90 אלף דולר?",
+            )
         reply = _guard_repetition_and_progress(state, reply)
+        state.add_history_turn("assistant", reply, "clarify_budget")
         save_conversation_state(state)
         return SalesTurnResult(
             reply=reply,
@@ -758,18 +583,19 @@ def handle_sales_turn(
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
             phase=state.phase,
-            rag_mode="sales_dialogue+clarify_constraints",
+            rag_mode="sales_dialogue+clarify_budget",
             show_vehicle_cards=False,
         )
 
-    if _is_budget_objection(message):
-        budget_turn = _handle_budget_objection(state, message)
-        if budget_turn is not None:
-            return budget_turn
-
-    if state.turn_count == 1 and not state.filled_slots():
-        reply = generate_welcome(state)
+    if policy.action == PolicyAction.HANDLE_EXPLORATORY:
+        state.use_case = None
+        state.body_type = None
+        state.last_refinement_key = None
+        state.last_recommended_ids = []
+        reply = generate_exploratory_response(state, message)
+        reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "exploratory")
         save_conversation_state(state)
         return SalesTurnResult(
             reply=reply,
@@ -777,10 +603,35 @@ def handle_sales_turn(
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
             phase=state.phase,
-            rag_mode="sales_dialogue",
+            rag_mode="sales_dialogue+exploratory",
+            show_vehicle_cards=False,
         )
 
-    if _matches_any(message, RESERVE_SIGNALS):
+    if policy.action == PolicyAction.HANDLE_TOPIC_SHIFT:
+        state.last_refinement_key = None
+        state.last_recommended_ids = []
+        reply = generate_topic_shift_response(state, message)
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "topic_shift")
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+topic_shift",
+            show_vehicle_cards=False,
+        )
+
+    if policy.action == PolicyAction.HANDLE_PRICE_OBJECTION:
+        budget_turn = _handle_budget_objection(state, message, extracted)
+        if budget_turn is not None:
+            state.add_history_turn("assistant", budget_turn.reply, "price_objection")
+            return budget_turn
+
+    if policy.action == PolicyAction.RESERVE_VEHICLE or _matches_any(message, RESERVE_SIGNALS):
         vehicle = _pick_vehicle_for_action(state, message)
         if vehicle is None:
             reply = generate_clarifying_question(
@@ -788,6 +639,7 @@ def handle_sales_turn(
                 "Which vehicle would you like to reserve? You can say e.g. reserve vehicle #16.",
             )
             state.phase = DialoguePhase.RESERVE
+            state.add_history_turn("assistant", reply, "reserve_clarify")
             save_conversation_state(state)
             return SalesTurnResult(
                 reply=reply,
@@ -799,12 +651,14 @@ def handle_sales_turn(
             )
         if vehicle.pending_delisting:
             state.phase = DialoguePhase.RESERVE
+            reply = (
+                f"Vehicle #{vehicle.id} is Pending De-listing (pre-2022) and cannot be reserved. "
+                "Want alternatives from our 2022+ inventory?"
+            )
+            state.add_history_turn("assistant", reply, "reserve_blocked")
             save_conversation_state(state)
             return SalesTurnResult(
-                reply=(
-                    f"Vehicle #{vehicle.id} is Pending De-listing (pre-2022) and cannot be reserved. "
-                    "Want alternatives from our 2022+ inventory?"
-                ),
+                reply=reply,
                 state=state,
                 vehicles=[vehicle],
                 intent=IntentKind.RESERVE_INTENT,
@@ -812,6 +666,7 @@ def handle_sales_turn(
                 rag_mode="sales_dialogue",
             )
         state.phase = DialoguePhase.RESERVE
+        state.add_history_turn("assistant", f"Reserving #{vehicle.id}", "reserve")
         save_conversation_state(state)
         return SalesTurnResult(
             reply="",
@@ -824,13 +679,14 @@ def handle_sales_turn(
             vehicle_id=vehicle.id,
         )
 
-    if _matches_any(message, PURCHASE_SIGNALS) or (
+    if policy.action == PolicyAction.PURCHASE_VEHICLE or _matches_any(message, PURCHASE_SIGNALS) or (
         state.phase == DialoguePhase.PURCHASE and state.contact_email
     ):
         vehicle = _pick_vehicle_for_action(state, message)
         if not state.contact_email and not extract_email(message, user_email):
             reply = generate_purchase_prompt(state, vehicle)
             state.phase = DialoguePhase.PURCHASE
+            state.add_history_turn("assistant", reply, "purchase_prompt")
             save_conversation_state(state)
             return SalesTurnResult(
                 reply=reply,
@@ -841,6 +697,7 @@ def handle_sales_turn(
                 rag_mode="sales_dialogue",
             )
         state.phase = DialoguePhase.PURCHASE
+        state.add_history_turn("assistant", "Processing purchase", "purchase")
         save_conversation_state(state)
         return SalesTurnResult(
             reply="",
@@ -853,7 +710,7 @@ def handle_sales_turn(
             vehicle_id=vehicle.id if vehicle else None,
         )
 
-    if _matches_any(message, COMPARE_SIGNALS) or state.phase == DialoguePhase.COMPARING:
+    if policy.action == PolicyAction.COMPARE_VEHICLES or _matches_any(message, COMPARE_SIGNALS) or state.phase == DialoguePhase.COMPARING:
         compare_ids = _resolve_compare_ids(state, message)
         vehicles = [v for vid in compare_ids if (v := get_vehicle_by_id(vid)) is not None]
         if len(vehicles) < 2:
@@ -862,6 +719,7 @@ def handle_sales_turn(
                 "Which two or three vehicles should I compare? Mention ids like #16 and #22.",
             )
             state.phase = DialoguePhase.COMPARING
+            state.add_history_turn("assistant", reply, "compare_clarify")
             save_conversation_state(state)
             return SalesTurnResult(
                 reply=reply,
@@ -875,6 +733,7 @@ def handle_sales_turn(
         reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.COMPARING
         state.compare_vehicle_ids = [v.id for v in vehicles]
+        state.add_history_turn("assistant", reply, "comparison")
         save_conversation_state(state)
         return SalesTurnResult(
             reply=reply,
@@ -888,18 +747,17 @@ def handle_sales_turn(
 
     refinement = _handle_preference_refinement(state, message)
     if refinement is not None:
+        state.add_history_turn("assistant", refinement.reply, "preference_refine")
         return refinement
 
-    question = _next_discovery_question(state)
-    if (
-        question is None
-        and state.turn_count < DIALOGUE_CONTRACT["min_discovery_turns_before_full_reco"]
-        and not _explicit_fast_options_request(message)
-    ):
-        question = "Before I shortlist, do you drive mostly in the city or on longer highway trips?"
-    if question and not state.has_discovery_basics():
-        reply = generate_clarifying_question(state, _contextual_discovery_question(state, question))
+    if policy.action == PolicyAction.ASK_PASSENGERS:
+        if state.turn_count == 1 and not state.filled_slots():
+            reply = generate_welcome(state)
+        else:
+            reply = generate_ask_passengers(state)
+        reply = _guard_repetition_and_progress(state, reply)
         state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "ask_passengers")
         save_conversation_state(state)
         return SalesTurnResult(
             reply=reply,
@@ -907,7 +765,81 @@ def handle_sales_turn(
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
             phase=state.phase,
-            rag_mode="sales_dialogue",
+            rag_mode="sales_dialogue+discovery",
+            show_vehicle_cards=False,
+        )
+
+    if policy.action == PolicyAction.ASK_USE_CASE:
+        reply = generate_ask_use_case(state)
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "ask_use_case")
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+discovery",
+            show_vehicle_cards=False,
+        )
+
+    if policy.action == PolicyAction.ASK_CITY_VS_HIGHWAY:
+        reply = generate_ask_city_vs_highway(state)
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "ask_city_vs_highway")
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+discovery",
+            show_vehicle_cards=False,
+        )
+
+    if policy.action == PolicyAction.ASK_BUDGET:
+        reply = generate_ask_budget(state)
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "ask_budget")
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+discovery",
+            show_vehicle_cards=False,
+        )
+
+    if (
+        state.turn_count < DIALOGUE_CONTRACT["min_discovery_turns_before_full_reco"]
+        and not state.has_discovery_basics()
+        and not _explicit_fast_options_request(message)
+    ):
+        if state.passengers is None:
+            reply = generate_ask_passengers(state)
+        elif not state.use_case and not state.body_type:
+            reply = generate_ask_use_case(state)
+        else:
+            reply = generate_ask_budget(state)
+        reply = _guard_repetition_and_progress(state, reply)
+        state.phase = DialoguePhase.DISCOVERY
+        state.add_history_turn("assistant", reply, "early_discovery")
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=reply,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+discovery",
+            show_vehicle_cards=False,
         )
 
     retrieval = hybrid_search_inventory(message, state=state, extracted=extracted, limit=3)
@@ -918,6 +850,7 @@ def handle_sales_turn(
     state.phase = DialoguePhase.RECOMMENDING
     reply = generate_recommendations(state, vehicles)
     reply = _guard_repetition_and_progress(state, reply)
+    state.add_history_turn("assistant", reply, "recommendation")
     save_conversation_state(state)
     return SalesTurnResult(
         reply=reply,

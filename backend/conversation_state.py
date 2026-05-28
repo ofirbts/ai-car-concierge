@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import uuid
 from enum import Enum
 
@@ -34,9 +33,12 @@ class ConversationState(BaseModel):
     passengers: int | None = None
     family_size: int | None = None
     use_case: str | None = None
+    city_vs_highway: str | None = None
+    comfort_vs_efficiency: str | None = None
     must_have_features: list[str] = Field(default_factory=list)
     timeline: str | None = None
     shortlist_ids: list[int] = Field(default_factory=list)
+    rejected_vehicle_ids: list[int] = Field(default_factory=list)
     contact_email: EmailStr | None = None
     space_priority: str | None = None
     phase: DialoguePhase = DialoguePhase.DISCOVERY
@@ -48,8 +50,10 @@ class ConversationState(BaseModel):
     last_assistant_reply: str | None = None
     repetition_count: int = 0
     stall_turns: int = 0
+    frustration_level: int = 0
     budget_sensitivity: str | None = None
     rejected_constraints: list[str] = Field(default_factory=list)
+    conversation_history: list[dict] = Field(default_factory=list)
 
     def filled_slots(self) -> dict[str, object]:
         out: dict[str, object] = {}
@@ -65,6 +69,10 @@ class ConversationState(BaseModel):
             out["family_size"] = self.family_size
         if self.use_case:
             out["use_case"] = self.use_case
+        if self.city_vs_highway:
+            out["city_vs_highway"] = self.city_vs_highway
+        if self.comfort_vs_efficiency:
+            out["comfort_vs_efficiency"] = self.comfort_vs_efficiency
         if self.must_have_features:
             out["must_have_features"] = self.must_have_features
         if self.timeline:
@@ -82,8 +90,21 @@ class ConversationState(BaseModel):
     def has_discovery_basics(self) -> bool:
         passenger_info = self.passengers is not None or self.family_size is not None
         budget_info = self.budget is not None
-        preference_info = bool(self.use_case or self.body_type or self.space_priority)
+        preference_info = bool(
+            self.use_case
+            or self.body_type
+            or self.space_priority
+            or self.city_vs_highway
+        )
         return passenger_info and budget_info and preference_info
+
+    def add_history_turn(self, role: str, message: str, intent: str | None = None) -> None:
+        entry: dict = {"role": role, "message": message[:300]}
+        if intent:
+            entry["intent"] = intent
+        self.conversation_history.append(entry)
+        if len(self.conversation_history) > 12:
+            self.conversation_history = self.conversation_history[-12:]
 
     def bump_turn(self) -> None:
         self.turn_count += 1

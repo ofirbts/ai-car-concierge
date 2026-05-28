@@ -19,6 +19,15 @@ NLG_SYSTEM = (
     "Do not use markdown bullet lists. Mention ids with #."
 )
 
+CONVERSATIONAL_SYSTEM = (
+    "You are a warm, natural automotive advisor. "
+    "Your reply must feel human and conversational — not robotic or template-like. "
+    "Match the customer's language (Hebrew if they wrote in Hebrew, English otherwise). "
+    "Keep replies concise: 1-3 sentences. "
+    "Never use markdown. Never push to a next step unless natural. "
+    "If they asked a social question, answer it naturally before gently steering back."
+)
+
 
 def _vehicle_fact_line(vehicle: Vehicle) -> str:
     stock = f"in stock ({vehicle.stock_count})" if vehicle.stock_count > 0 else "currently out of stock"
@@ -320,3 +329,186 @@ def generate_welcome(state: ConversationState) -> str:
         "Welcome. I can help you narrow this down quickly and confidently. "
         "To start, how many people usually ride with you?"
     )
+
+
+def generate_greeting_response(state: ConversationState) -> str:
+    lang = state.language_preference
+    if lang == "he":
+        options = [
+            "היי! שמח שבאת 🙂 איזה סוג רכב אתה מחפש — משהו פרקטי לעיר, משפחתי, או יותר בכיוון כיפי?",
+            "שלום! בוא נמצא לך משהו שמתאים בדיוק. לאיזה שימוש עיקרי הרכב?",
+            "היי 🙂 איך אוכל לעזור לך היום? מחפש רכב חדש?",
+        ]
+    else:
+        options = [
+            "Hey! Great to have you here. What kind of car are you looking for — something practical, family-sized, or more fun?",
+            "Hi there! I'm here to help you find the right fit. What will you mainly use the car for?",
+            "Hello! What brings you in today — are you starting a car search?",
+        ]
+    idx = state.turn_count % len(options)
+    return options[idx]
+
+
+def generate_smalltalk_response(state: ConversationState, user_message: str) -> str:
+    lang = state.language_preference
+    context = (
+        f"Customer language: {lang}\n"
+        f"Customer said: {user_message}\n"
+        f"Known context: {state.filled_slots() or 'none yet'}\n\n"
+        "Respond naturally to the social message in 1-2 sentences. "
+        "If appropriate, gently and naturally steer back to car finding. "
+        "Do NOT use any template phrases. Match the customer's language."
+    )
+    text = generate_text(CONVERSATIONAL_SYSTEM, context)
+    if text and len(text.strip()) > 5:
+        return polish_response(text.strip())
+    if lang == "he":
+        return "אני בסדר גמור, תודה שאלת 🙂 אז, מה מחפשים — יש לך כבר כיוון כלשהו?"
+    return "I'm doing well, thanks for asking! So — are you in the market for a new car?"
+
+
+def generate_criteria_explanation(state: ConversationState) -> str:
+    lang = state.language_preference
+    if lang == "he":
+        return (
+            "כשבוחרים רכב, הגורמים המרכזיים הם: "
+            "נוחות הנסיעה, יעילות דלק (או עלות טעינה), מרווח תא הנוסעים, "
+            "התאמה לנסיעות עיר לעומת כביש מהיר, אמינות לאורך זמן, שקט בנסיעה, "
+            "ועלויות הבעלות הכוללות (ביטוח, תחזוקה, ירידת ערך). "
+            "מה מבין אלה הכי חשוב לך?"
+        )
+    return (
+        "The main factors when choosing a car are: "
+        "ride comfort, fuel efficiency (or charging cost for EVs), cabin and cargo space, "
+        "city vs highway suitability, long-term reliability, ride quietness, "
+        "and total ownership costs (insurance, maintenance, depreciation). "
+        "Which of these matters most to you?"
+    )
+
+
+def generate_exploratory_response(state: ConversationState, user_message: str) -> str:
+    lang = state.language_preference
+    context = (
+        f"Customer language: {lang}\n"
+        f"Customer said: {user_message}\n"
+        f"Known context: {state.filled_slots() or 'none'}\n"
+        f"Previous recommendations: {state.last_recommended_ids or 'none'}\n\n"
+        "The customer wants to explore different options. "
+        "Respond naturally: acknowledge, ask what direction they'd like to go. "
+        "Offer 2-3 directions like city-focused, family-sized, sporty, efficient, budget-friendly. "
+        "Do NOT list vehicles. Match the customer's language."
+    )
+    text = generate_text(CONVERSATIONAL_SYSTEM, context)
+    if text and len(text.strip()) > 5:
+        return polish_response(text.strip())
+    if lang == "he":
+        return (
+            "בסדר, נלך לכיוון אחר. מה מתאים יותר — "
+            "רכב עירוני קטן ויעיל, משהו יותר משפחתי ומרווח, "
+            "או אולי כיוון שונה כמו חשמלי או ספורטיבי?"
+        )
+    return (
+        "Sure, let's explore something different. "
+        "Which direction feels right — a compact city car, something more spacious for the family, "
+        "an electric option, or a sportier style?"
+    )
+
+
+def generate_topic_shift_response(state: ConversationState, user_message: str) -> str:
+    lang = state.language_preference
+    context = (
+        f"Customer language: {lang}\n"
+        f"Customer said: {user_message}\n"
+        f"Previous context: {state.filled_slots() or 'none'}\n\n"
+        "The customer shifted to a different angle. "
+        "Acknowledge naturally, then ask what to focus on now. "
+        "Keep it 1-2 sentences. Match the customer's language."
+    )
+    text = generate_text(CONVERSATIONAL_SYSTEM, context)
+    if text and len(text.strip()) > 5:
+        return polish_response(text.strip())
+    if lang == "he":
+        return "הבנתי, כיוון חדש. מה הכי חשוב לך עכשיו — מחיר, נוחות, חסכון בדלק, או גודל?"
+    return "Got it, new direction. What matters most now — price, comfort, efficiency, or size?"
+
+
+def generate_repair_turn_response(state: ConversationState) -> str:
+    lang = state.language_preference
+    if state.frustration_level and state.frustration_level >= 2:
+        if lang == "he":
+            return (
+                "מתנצל שזה לא הלך כמו שציפית. "
+                "בוא נתחיל מחדש — מה הכי חשוב לך ברכב הבא?"
+            )
+        return (
+            "I'm sorry this hasn't been working well. "
+            "Let's start fresh — what matters most to you in your next car?"
+        )
+    if lang == "he":
+        return "הבנתי. מה היה פחות מדויק — מחיר, גודל, נוחות או סוג הנסיעה?"
+    return "Understood. What felt off — price, size, comfort, or the type of driving?"
+
+
+def generate_ask_passengers(state: ConversationState) -> str:
+    lang = state.language_preference
+    context = (
+        f"Customer language: {lang}\n"
+        f"Known context: {state.filled_slots() or 'none yet'}\n\n"
+        "Ask naturally how many people usually ride in the car. "
+        "1 sentence. Conversational, not a form. Match customer's language."
+    )
+    text = generate_text(CONVERSATIONAL_SYSTEM, context)
+    if text and len(text.strip()) > 5:
+        return polish_response(text.strip())
+    if lang == "he":
+        return "כמה אנשים בדרך כלל נוסעים איתך?"
+    return "How many people usually ride along with you?"
+
+
+def generate_ask_use_case(state: ConversationState) -> str:
+    lang = state.language_preference
+    passenger_note = ""
+    if state.passengers:
+        passenger_note = f"Passenger count: {state.passengers}. "
+    context = (
+        f"Customer language: {lang}\n"
+        f"{passenger_note}Known context: {state.filled_slots() or 'none'}\n\n"
+        "Ask what the car will mainly be used for. "
+        "Give 2-3 natural options like city commute, family trips, weekend drives. "
+        "1-2 sentences. Match customer's language."
+    )
+    text = generate_text(CONVERSATIONAL_SYSTEM, context)
+    if text and len(text.strip()) > 5:
+        return polish_response(text.strip())
+    if lang == "he":
+        return "לאיזה שימוש עיקרי הרכב — נסיעות יומיומיות בעיר, טיולים משפחתיים, או משהו אחר?"
+    return "What will you mainly use the car for — daily city commuting, family trips, or something else?"
+
+
+def generate_ask_city_vs_highway(state: ConversationState) -> str:
+    lang = state.language_preference
+    context = (
+        f"Customer language: {lang}\n"
+        f"Known context: {state.filled_slots() or 'none'}\n\n"
+        "Ask whether they drive mostly in the city or on longer highway trips. "
+        "1 sentence. Natural, conversational. Match customer's language."
+    )
+    text = generate_text(CONVERSATIONAL_SYSTEM, context)
+    if text and len(text.strip()) > 5:
+        return polish_response(text.strip())
+    if lang == "he":
+        return "רוב הנסיעות שלך בעיר או גם הרבה בין עירוני?"
+    return "Do you drive mostly in the city or do you do a lot of highway miles too?"
+
+
+def generate_ask_budget(state: ConversationState) -> str:
+    lang = state.language_preference
+    parts: list[str] = []
+    if state.passengers:
+        parts.append(f"{state.passengers} riders" if lang == "en" else f"{state.passengers} נוסעים")
+    if state.use_case:
+        parts.append(state.use_case.replace("_", " "))
+    prefix = f"For {', '.join(parts)} — " if parts and lang == "en" else (f"עבור {', '.join(parts)} — " if parts else "")
+    if lang == "he":
+        return f"{prefix}מה התקציב שלך בערך?"
+    return f"{prefix}what's your rough budget?"
