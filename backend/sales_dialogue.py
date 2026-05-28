@@ -143,8 +143,6 @@ def _parse_passengers(message: str) -> int | None:
         return 2
     if re.search(r"\bpair\b", lower):
         return 2
-    if re.search(r"\bfamily\b|\bkids\b|\bchildren\b|\bמשפחה\b|\bילדים\b", lower):
-        return 4
     if re.search(r"\bbaby\b|\binfant\b|\bתינוק\b", lower):
         return 3
     return None
@@ -198,6 +196,10 @@ def _parse_fuel(message: str) -> str | None:
 
 def _parse_use_case(message: str) -> str | None:
     lower = message.lower()
+    if re.search(r"(without|no|not)\s+family", lower) or re.search(r"בלי\s+טיולים\s+משפחתיים", lower):
+        return "city driving"
+    if re.search(r"\bמשהו אחר\b", lower):
+        return "city driving"
     if re.search(r"\bcity\b", lower) and re.search(r"\bweekend\b", lower):
         return "city and weekend drives"
     if re.search(r"\bcity\b|\burban\b|\bcommute\b|\bעיר\b", lower):
@@ -320,7 +322,17 @@ def _wants_new_search(message: str) -> bool:
     lower = message.lower()
     return bool(
         re.search(
-            r"\b(show|find|search|other|different|another|more options|something else)\b",
+            r"\b(show|find|search|other|different|another|more options|something else|samthing else|somthing else)\b|משהו אחר",
+            lower,
+        )
+    )
+
+
+def _is_smalltalk(message: str) -> bool:
+    lower = message.lower().strip()
+    return bool(
+        re.search(
+            r"\b(how old are you|how old are u|who are you|what are you|tell me about yourself|joke)\b|בן כמה|מי אתה|מה אתה",
             lower,
         )
     )
@@ -506,6 +518,22 @@ def handle_sales_turn(
 ) -> SalesTurnResult:
     state.bump_turn()
     update_state_from_message(state, message, extracted, user_email)
+
+    if _is_smalltalk(message):
+        state.phase = DialoguePhase.RECOMMENDING if state.last_recommended_ids else DialoguePhase.DISCOVERY
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply=(
+                "I'm your AI car advisor, here to help you choose confidently. "
+                "If you want, tell me what should change and I'll refresh the shortlist."
+            ),
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+smalltalk",
+            show_vehicle_cards=False,
+        )
 
     if _is_budget_objection(message):
         budget_turn = _handle_budget_objection(state, message)

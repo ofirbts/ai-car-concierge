@@ -58,6 +58,16 @@ def test_natural_language_family_query_returns_recommendations(isolated_db):
     assert "?" in response.reply or response.vehicles
 
 
+def test_family_opening_asks_passengers_before_budget(isolated_db):
+    response = handle_chat(
+        ChatRequest(message="I'm looking for a family car"),
+        rag=_rag(),
+    )
+    assert response.dialogue_phase == DialoguePhase.DISCOVERY
+    lowered = response.reply.lower()
+    assert "how many" in lowered or "ride" in lowered
+
+
 def test_compare_flow_with_session(isolated_db):
     session_id = handle_chat(
         ChatRequest(message="help me find an SUV under 80000"),

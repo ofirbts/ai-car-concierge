@@ -83,6 +83,10 @@ def test_use_case_prefers_city_weekend_over_family_keyword():
     assert _parse_use_case("family of 4, mostly city and weekend drives") == "city and weekend drives"
 
 
+def test_use_case_supports_without_family_phrase():
+    assert _parse_use_case("משהו אחר בלי טיולים משפחתיים") == "city driving"
+
+
 def test_memory_callback_uses_city_not_family_trips():
     state = ConversationState(session_id="mem")
     state.use_case = "city and weekend drives"

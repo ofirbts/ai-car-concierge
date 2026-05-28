@@ -82,3 +82,25 @@ def test_reserve_outside_shortlist_gets_note(isolated_db):
     assert response.reserved_vehicle is not None
     if response.reserved_vehicle.id not in (response.vehicles or []):
         assert "wasn't in your latest recommendations" in response.reply or "Done" in response.reply
+
+
+def test_smalltalk_does_not_repeat_recommendations(isolated_db):
+    state = ConversationState(session_id="smalltalk")
+    state.turn_count = 4
+    state.passengers = 4
+    state.budget = 75000
+    state.use_case = "family trips"
+    state.body_type = "suv"
+    state.last_recommended_ids = [55, 77, 69]
+    extracted = classify_intent_rule_based("how old are u")
+    turn = handle_sales_turn(
+        "how old are u",
+        extracted,
+        state,
+        None,
+        _rag(),
+    )
+    assert turn.intent.value == "general_chat"
+    assert turn.show_vehicle_cards is False
+    assert turn.vehicles == []
+    assert "advisor" in turn.reply.lower()

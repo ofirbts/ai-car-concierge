@@ -172,7 +172,7 @@ def _fallback_recommendations(state: ConversationState, vehicles: list[Vehicle])
         )
         if alt_b:
             alt_line += (
-                f" The {alt_b.year} {alt_b.make} {alt_b.model} (#{alt_b.id}) is a third option with "
+                f" The {alt_b.year} {alt_b.make} {alt_b.model} (#{alt_b.id}) is a third option because "
                 f"{_reason_for_vehicle(state, alt_b, 2)}."
             )
     else:
