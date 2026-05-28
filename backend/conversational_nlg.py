@@ -14,7 +14,8 @@ NLG_SYSTEM = (
     "Never invent prices, stock, features, or policies. "
     "Reason about fit for this customer, not generic metadata. "
     "Use memory callbacks like 'since you mentioned...'. "
-    "Keep each reply 2-5 concise sentences and avoid repetitive phrasing. "
+    "Keep each reply 2-4 concise sentences and avoid repetitive phrasing. "
+    "Sound like a human advisor, not a template. "
     "Do not use markdown bullet lists. Mention ids with #."
 )
 
@@ -79,15 +80,19 @@ def _reason_for_vehicle(state: ConversationState, vehicle: Vehicle, rank: int) -
         return "it hits a sweet spot between comfort and confident highway manners"
     if _is_family_focus(state) and body == "suv":
         return "you will notice the extra room the moment everyone gets in"
-    if _is_city_focus(state) and "electric" in fuel:
+    if _is_city_focus(state) and ("electric" in fuel or "hybrid" in fuel):
         return "it feels calm and efficient in stop-and-go traffic"
+    if _is_city_focus(state) and body == "sedan":
+        return "the size and visibility make daily city parking much easier"
     if state.space_priority == "space" and body == "suv":
         return "cargo flexibility is clearly stronger than the alternatives here"
     if state.space_priority == "fuel" and ("electric" in fuel or "hybrid" in fuel):
         return "running costs stay more predictable week to week"
     if rank == 0:
         return "this is probably your strongest overall fit so far"
-    return "it is a balanced match for how you plan to use the car"
+    if body == "sedan":
+        return "it keeps day-to-day driving simple without giving up comfort"
+    return "it gives you a practical all-round balance for your routine"
 
 
 def _replace_disallowed_phrases(text: str) -> str:
@@ -155,19 +160,19 @@ def _fallback_recommendations(state: ConversationState, vehicles: list[Vehicle])
     top = picks[0]
     head = _memory_callback(state)
     lead = (
-        f"{head} I would start with the {top.year} {top.make} {top.model} (#{top.id}) — "
-        f"{_reason_for_vehicle(state, top, 0).capitalize()}."
+        f"{head} My first pick is the {top.year} {top.make} {top.model} (#{top.id}) "
+        f"because {_reason_for_vehicle(state, top, 0)}."
     )
     if len(picks) > 1:
         alt_a = picks[1]
         alt_b = picks[2] if len(picks) > 2 else None
         alt_line = (
-            f"Next, the {alt_a.year} {alt_a.make} {alt_a.model} (#{alt_a.id}) is worth considering if "
-            f"{_reason_for_vehicle(state, alt_a, 1)}."
+            f"If you want an alternative, the {alt_a.year} {alt_a.make} {alt_a.model} (#{alt_a.id}) "
+            f"is strong because {_reason_for_vehicle(state, alt_a, 1)}."
         )
         if alt_b:
             alt_line += (
-                f" The {alt_b.year} {alt_b.make} {alt_b.model} (#{alt_b.id}) is another strong option if "
+                f" The {alt_b.year} {alt_b.make} {alt_b.model} (#{alt_b.id}) is a third option with "
                 f"{_reason_for_vehicle(state, alt_b, 2)}."
             )
     else:
@@ -175,8 +180,8 @@ def _fallback_recommendations(state: ConversationState, vehicles: list[Vehicle])
     closer = _pick(
         [
             "Want me to walk you through the tradeoffs, or hold this one now?",
-            "I can compare your top two side-by-side, or reserve your leading pick.",
-            "If this feels right, I can hold it while we compare one alternative.",
+            "I can do a quick side-by-side compare, or hold your top pick now.",
+            "If this feels right, I can hold it while we sanity-check one alternative.",
         ],
         state,
         shift=1,

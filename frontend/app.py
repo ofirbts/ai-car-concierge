@@ -13,6 +13,7 @@ from backend.chat_idempotency import (
     stable_purchase_idempotency_key,
     stable_reserve_idempotency_key,
 )
+from frontend.view_utils import should_show_vehicle_cards, vehicle_card_title
 
 
 def _apply_streamlit_secrets() -> None:
@@ -296,20 +297,6 @@ def _render_hero() -> None:
     )
 
 
-def _should_show_vehicle_cards(messages: list[dict], index: int, message: dict) -> bool:
-    if message.get("role") != "assistant" or not message.get("vehicles"):
-        return False
-    if message.get("show_vehicle_cards") is False:
-        return False
-    if message.get("show_vehicle_cards") is True:
-        return True
-    last_idx = -1
-    for idx, item in enumerate(messages):
-        if item.get("role") == "assistant" and item.get("vehicles"):
-            last_idx = idx
-    return index == last_idx
-
-
 def _render_vehicle_cards(vehicles: list[dict], *, title: str = "Recommended vehicles") -> None:
     if not vehicles:
         return
@@ -460,12 +447,8 @@ with chat_col:
             ),
             unsafe_allow_html=True,
         )
-        if _should_show_vehicle_cards(st.session_state.messages, idx, message):
-            reserved = message.get("reserved") or (
-                len(message["vehicles"]) == 1
-                and message.get("content", "").lower().startswith("done")
-            )
-            title = "Reserved" if reserved else "Top picks"
+        if should_show_vehicle_cards(st.session_state.messages, idx, message):
+            title = vehicle_card_title(message)
             _render_vehicle_cards(message["vehicles"], title=title)
 
     if prompt := st.chat_input("Tell me what you need — budget, family size, preferences…"):

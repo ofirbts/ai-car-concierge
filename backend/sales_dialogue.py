@@ -455,16 +455,16 @@ def _handle_preference_refinement(
     refine_key = _refinement_key(message, state)
     if state.last_refinement_key == refine_key:
         reply = (
-            f"We are aligned on that priority — I'd still lead with the "
+            f"We are aligned on that priority, so I'd still lead with the "
             f"{best.year} {best.make} {best.model} (#{best.id}). "
-            f"Want a compare ({ids_hint}), or should I hold #{best.id}?"
+            f"Do you want a quick compare ({ids_hint}), or should I hold #{best.id}?"
         )
     elif state.space_priority == "space":
         reply = (
-            f"Since you said space matters most, I'd prioritize comfort and cabin room. "
+            f"Since space matters most for you, I'd prioritize comfort and cabin room. "
             f"From your shortlist, the {best.year} {best.make} {best.model} (#{best.id}) "
             f"is still the strongest overall fit. "
-            f"Want a quick compare ({ids_hint}), or want me to hold #{best.id} now?"
+            f"Want a quick compare ({ids_hint}), or should I hold #{best.id} now?"
         )
     else:
         reply = (

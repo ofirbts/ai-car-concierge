@@ -1,0 +1,28 @@
+name: Live RAG
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  live-rag:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: Verify GOOGLE_API_KEY secret is set
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "::error::GitHub secret GOOGLE_API_KEY is empty."
+            exit 1
+          fi
+      - name: Run live embedding tests
+        run: pytest -q -m live --tb=short
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GOOGLE_API_KEY }}

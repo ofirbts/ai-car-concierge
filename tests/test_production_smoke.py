@@ -104,6 +104,8 @@ def test_production_api_version_and_conversational_sales(production_key):
 
 
 def test_production_reserve_decrements_stock(production_key):
+    if os.environ.get("RUN_MUTATING_PRODUCTION_SMOKE") != "true":
+        pytest.skip("Set RUN_MUTATING_PRODUCTION_SMOKE=true for reserve stock mutation test")
     vehicle_id = 16
     headers = {"X-API-Key": production_key}
     before_resp = httpx.get(

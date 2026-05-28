@@ -128,3 +128,16 @@ def test_compare_turn_hides_vehicle_cards(isolated_db):
     )
     assert turn.show_vehicle_cards is False
     assert "value" in turn.reply.lower() or "frame" in turn.reply.lower()
+
+
+def test_city_recommendation_avoids_robotic_balanced_phrase(isolated_db):
+    state = ConversationState(session_id="city-natural")
+    state.turn_count = 3
+    state.passengers = 2
+    state.budget = 75000
+    state.use_case = "city driving"
+    state.body_type = "sedan"
+    vehicles = search_vehicles(VehicleSearchFilters(year_min=2022, in_stock_only=True, limit=3))
+    text = _fallback_recommendations(state, vehicles).lower()
+    assert "balanced match for how you plan to use the car" not in text
+    assert "my first pick" in text
