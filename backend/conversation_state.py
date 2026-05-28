@@ -11,9 +11,16 @@ from backend.database import ensure_app_tables, get_connection
 
 
 class DialoguePhase(str, Enum):
+    GREETING = "greeting"
     DISCOVERY = "discovery"
+    CLARIFICATION = "clarification"
+    EXPLORATORY_GUIDANCE = "exploratory_guidance"
     RECOMMENDING = "recommending"
     COMPARING = "comparing"
+    OBJECTION_HANDLING = "objection_handling"
+    REPAIR_TURN = "repair_turn"
+    SHORTLIST_REFINEMENT = "shortlist_refinement"
+    CLOSING = "closing"
     RESERVE = "reserve"
     PURCHASE = "purchase"
     COMPLETED = "completed"
@@ -41,6 +48,8 @@ class ConversationState(BaseModel):
     last_assistant_reply: str | None = None
     repetition_count: int = 0
     stall_turns: int = 0
+    budget_sensitivity: str | None = None
+    rejected_constraints: list[str] = Field(default_factory=list)
 
     def filled_slots(self) -> dict[str, object]:
         out: dict[str, object] = {}
