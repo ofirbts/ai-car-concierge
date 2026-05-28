@@ -37,6 +37,9 @@ class ConversationState(BaseModel):
     last_recommended_ids: list[int] = Field(default_factory=list)
     compare_vehicle_ids: list[int] = Field(default_factory=list)
     last_refinement_key: str | None = None
+    language_preference: str = "en"
+    last_assistant_reply: str | None = None
+    repetition_count: int = 0
 
     def filled_slots(self) -> dict[str, object]:
         out: dict[str, object] = {}
@@ -62,6 +65,8 @@ class ConversationState(BaseModel):
             out["contact_email"] = str(self.contact_email)
         if self.space_priority:
             out["space_priority"] = self.space_priority
+        if self.language_preference:
+            out["language_preference"] = self.language_preference
         return out
 
     def has_discovery_basics(self) -> bool:

@@ -13,6 +13,8 @@ from backend.conversational_nlg import (
     generate_welcome,
 )
 from backend.database import Vehicle, get_vehicle_by_id
+from backend.dialogue_analysis import analyze_dialogue_turn
+from backend.dialogue_policy import choose_dialogue_policy
 from backend.intent import (
     ExtractedIntent,
     IntentKind,
@@ -518,20 +520,63 @@ def handle_sales_turn(
 ) -> SalesTurnResult:
     state.bump_turn()
     update_state_from_message(state, message, extracted, user_email)
+    analysis = analyze_dialogue_turn(message, state)
+    policy = choose_dialogue_policy(state, analysis)
 
-    if _is_smalltalk(message):
+    if policy.action == "switch_language_he":
+        state.language_preference = "he"
+        state.phase = DialoguePhase.DISCOVERY if not state.has_discovery_basics() else DialoguePhase.RECOMMENDING
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply="מעולה, ממשיך בעברית. כדי לדייק אותך מהר, מה התקציב ומה הכי חשוב לך כרגע?",
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+language_switch",
+            show_vehicle_cards=False,
+        )
+    if policy.action == "switch_language_en":
+        state.language_preference = "en"
+        state.phase = DialoguePhase.DISCOVERY if not state.has_discovery_basics() else DialoguePhase.RECOMMENDING
+        save_conversation_state(state)
+        return SalesTurnResult(
+            reply="Great, I'll continue in English. What should I optimize first: budget, comfort, efficiency, or space?",
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+language_switch",
+            show_vehicle_cards=False,
+        )
+    if policy.action == "smalltalk_repair":
         state.phase = DialoguePhase.RECOMMENDING if state.last_recommended_ids else DialoguePhase.DISCOVERY
         save_conversation_state(state)
         return SalesTurnResult(
             reply=(
-                "I'm your AI car advisor, here to help you choose confidently. "
-                "If you want, tell me what should change and I'll refresh the shortlist."
+                "I'm your AI car advisor. If you want, I can recalibrate now based on what matters most to you."
             ),
             state=state,
             vehicles=[],
             intent=IntentKind.GENERAL_CHAT,
             phase=state.phase,
             rag_mode="sales_dialogue+smalltalk",
+            show_vehicle_cards=False,
+        )
+    if policy.action in {"repair_turn", "topic_shift_recalibrate"}:
+        state.phase = DialoguePhase.DISCOVERY
+        state.last_refinement_key = None
+        save_conversation_state(state)
+        follow_up = policy.question or "What matters most in your decision right now?"
+        if state.language_preference == "he":
+            follow_up = "הבנתי. מה היה פחות מדויק — מחיר, גודל, נוחות או צריכת דלק?"
+        return SalesTurnResult(
+            reply=follow_up,
+            state=state,
+            vehicles=[],
+            intent=IntentKind.GENERAL_CHAT,
+            phase=state.phase,
+            rag_mode="sales_dialogue+repair_turn",
             show_vehicle_cards=False,
         )
 
